@@ -41,10 +41,10 @@ services:
 	}
 
 	// httptest servers use dynamic ports, so inject their URLs into the test config.
-	cfg.Services[0].Replicas = []string{
-		backend1.URL,
-		backend2.URL,
-		backend3.URL,
+	cfg.Services[0].Replicas = []config.Replica{
+		{URL: backend1.URL},
+		{URL: backend2.URL},
+		{URL: backend3.URL},
 	}
 
 	lb, err := NewLoadBalancer(cfg)

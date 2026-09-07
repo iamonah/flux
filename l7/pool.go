@@ -42,12 +42,12 @@ func NewServerPool(svcCfg *config.Service) (*BackendPool, error) {
 		return nil, fmt.Errorf("No replicas defined for service %s", svcCfg.Name)
 	}
 	for _, replica := range svcCfg.Replicas {
-		parsedURL, err := url.Parse(replica)
+		parsedURL, err := url.Parse(replica.URL)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to parse URL: %w", err)
 		}
 
-		backend := NewBackend(parsedURL, svcCfg.Matcher)
+		backend := NewBackend(parsedURL, svcCfg.Matcher, replica.Metadata.Weight)
 		backends = append(backends, backend)
 	}
 
@@ -57,10 +57,7 @@ func NewServerPool(svcCfg *config.Service) (*BackendPool, error) {
 		svcCfg.Strategy = &defaultStrategy
 	}
 
-	strategy, err := strategy.NewStrategy(
-		strategy.StrategyConfig{Type: *svcCfg.Strategy, Weights: svcCfg.Weights},
-		uint32(len(svcCfg.Replicas)),
-	)
+	strategy, err := strategy.NewStrategy(*svcCfg.Strategy, &svcCfg.Replicas)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to create strategy: %w", err)
 	}

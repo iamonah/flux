@@ -7,12 +7,19 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+type Metadata struct {
+	Weight *uint32 `yaml:"weight"`
+}
+
+type Replica struct {
+	URL    string  `yaml:"url"`
+	Metadata Metadata `yaml:"metadata"`
+}
 type Service struct {
-	Name     string   `yaml:"name"`
-	Matcher  string   `yaml:"matcher"`
-	Replicas []string `yaml:"replicas"`
+	Name     string    `yaml:"name"`
+	Matcher  string    `yaml:"matcher"`
+	Replicas []Replica `yaml:"replicas"`
 	Strategy *string   `yaml:"strategy"`
-	Weights  []uint32 `yaml:"weights"`
 }
 type Config struct {
 	Services        []*Service `yaml:"services"`

@@ -2,23 +2,29 @@ services:
   - name: payments-v1
     matcher: /api/v1/payments
     replicas:
-      - http://localhost:8081
-      - http://localhost:8082
-      - http://localhost:8083
+      - url: http://localhost:8081
+      - url: http://localhost:8082
+      - url: http://localhost:8083
     strategy: round-robin
 
   - name: payments-v2
     matcher: /api/v2/payments
     replicas:
-      - http://localhost:9081
-      - http://localhost:9082
-      - http://localhost:9083
+      - url: http://localhost:9081
+        metadata:
+          weight: 1
+      - url: http://localhost:9082
+        metadata:
+          weight: 2
+      - url: http://localhost:9083
+        metadata:
+          weight: 1
     strategy: weighted-round-robin
 
   - name: users
     matcher: /users
     replicas:
-      - http://localhost:8084
-      - http://localhost:8085
-      - http://localhost:8086
+      - url: http://localhost:8084
+      - url: http://localhost:8085
+      - url: http://localhost:8086
     strategy: round-robin

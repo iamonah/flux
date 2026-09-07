@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+
+	"github.com/iamonah/loadbalancer/config"
 )
 
 type StrategyType string
@@ -37,6 +39,37 @@ func (s StrategyType) String() string {
 type Strategy interface {
 	NextServer() uint32
 	AddBackendCount(length uint32)
+}
+
+func NewStrategy(strategy string, replicas *[]config.Replica) (Strategy, error) {
+	st, err := ParseStrategyType(strategy)
+	if err != nil {
+		return nil, err
+	}
+
+	lenghtofReplicas := uint32(len(*replicas))
+	switch st {
+	case RoundRobin:
+		return NewRoundRobin(lenghtofReplicas), nil
+
+	case WeightedRoundRobin:
+		weights := make([]uint32, lenghtofReplicas)
+		for i, replica := range *replicas {
+			if replica.Metadata.Weight != nil {
+				weights[i] = *replica.Metadata.Weight
+			} else {
+				weights[i] = 1 // Default weight if not specified
+			}
+		}
+
+		return NewWeightedRoundRobin(lenghtofReplicas, weights), nil
+
+	// case LeastConnections:
+	// return NewLeastConnections(), nil
+
+	default:
+		return nil, fmt.Errorf("unsupported strategy: %s", strategy)
+	}
 }
 
 type RoundRobinAlgo struct {
@@ -74,40 +107,14 @@ func (rr *RoundRobinAlgo) AddBackendCount(length uint32) {
 }
 
 type WeightedRoundRobinAlgo struct {
-	Current          atomic.Uint32
+	current          atomic.Uint32
 	LengthofReplicas atomic.Uint32
 	Weights          []uint32
 	CurrentWeight    atomic.Uint32
-	MaxWeight        uint32
+	MaxWeight        atomic.Int32
 	GCD              uint32
 }
 
 func NewWeightedRoundRobin(length uint32, weights []uint32) *WeightedRoundRobinAlgo { return nil }
 func (wrr *WeightedRoundRobinAlgo) NextServer() uint32                              { return 0 }
 func (wrr *WeightedRoundRobinAlgo) AddBackendCount(length uint32)                   {}
-
-type StrategyConfig struct {
-	Type    string
-	Weights []uint32
-}
-
-func NewStrategy(cfg StrategyConfig, length uint32) (Strategy, error) {
-	st, err := ParseStrategyType(cfg.Type)
-	if err != nil {
-		return nil, err
-	}
-
-	switch st {
-	case RoundRobin:
-		return NewRoundRobin(length), nil
-
-	case WeightedRoundRobin:
-		return NewWeightedRoundRobin(length, cfg.Weights), nil
-
-	// case LeastConnections:
-	// return NewLeastConnections(), nil
-
-	default:
-		return nil, fmt.Errorf("unsupported strategy: %s", cfg.Type)
-	}
-}

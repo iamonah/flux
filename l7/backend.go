@@ -11,9 +11,10 @@ type Backend struct {
 	url     *url.URL
 	proxy   *httputil.ReverseProxy
 	matcher string
+	weight  *uint32
 }
 
-func NewBackend(url *url.URL, matcher string) *Backend {
+func NewBackend(url *url.URL, matcher string, weight *uint32) *Backend {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(url)
@@ -47,6 +48,7 @@ func NewBackend(url *url.URL, matcher string) *Backend {
 		url:     url,
 		proxy:   proxy,
 		matcher: matcher,
+		weight: weight,
 	}
 }
 func (s *Backend) forward(w http.ResponseWriter, r *http.Request) {
