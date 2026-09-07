@@ -107,11 +107,15 @@ func (rr *RoundRobinAlgo) AddBackendCount(length uint32) {
 }
 
 type WeightedRoundRobinAlgo struct {
-	current          atomic.Uint32
+	//index of the current backend server
+	currentIndex     atomic.Uint32
+
 	LengthofReplicas atomic.Uint32
 	Weights          []uint32
 	CurrentWeight    atomic.Uint32
 	MaxWeight        atomic.Int32
+	// GCD is the greatest common divisor of all weights
+	//divides every weight without a remainder,
 	GCD              uint32
 }
 
