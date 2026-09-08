@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/iamonah/loadbalancer/config"
 	"github.com/iamonah/loadbalancer/l7"
@@ -13,7 +14,7 @@ import (
 )
 
 var (
-	port = flag.Int("port", 8080, "listening port")
+	port       = flag.Int("port", 8080, "listening port")
 	configFile = flag.String("config-path", "config.yaml", "path to config file")
 )
 
@@ -21,13 +22,13 @@ func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	flag.Parse()
 
-	file, err := os.Open(*configFile)
+	file, err := os.ReadFile(*configFile)
 	if err != nil {
 		log.Fatal().Msg("Failed to open config file: " + err.Error())
 	}
-	defer file.Close()
 
-	cfg, err := config.LoadConfig(file)
+	filedata := strings.NewReader(string(file))
+	cfg, err := config.LoadConfig(filedata)
 	if err != nil {
 		log.Error().Msg("Failed to load config: " + err.Error())
 		return
