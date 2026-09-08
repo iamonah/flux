@@ -3,6 +3,7 @@ package strategy
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/iamonah/loadbalancer/config"
@@ -62,7 +63,7 @@ func NewStrategy(strategy string, replicas *[]config.Replica) (Strategy, error) 
 			}
 		}
 
-		return NewWeightedRoundRobin(lenghtofReplicas, weights), nil
+		return NewSmoothWRR(replicas), nil
 
 	// case LeastConnections:
 	// return NewLeastConnections(), nil
@@ -72,13 +73,13 @@ func NewStrategy(strategy string, replicas *[]config.Replica) (Strategy, error) 
 	}
 }
 
-type RoundRobinAlgo struct {
+type roundRobinAlgo struct {
 	Current          atomic.Uint32
 	LengthofReplicas atomic.Uint32
 }
 
-func NewRoundRobin(length uint32) *RoundRobinAlgo {
-	rr := &RoundRobinAlgo{
+func NewRoundRobin(length uint32) *roundRobinAlgo {
+	rr := &roundRobinAlgo{
 		Current:          atomic.Uint32{},
 		LengthofReplicas: atomic.Uint32{},
 	}
@@ -86,7 +87,7 @@ func NewRoundRobin(length uint32) *RoundRobinAlgo {
 	return rr
 }
 
-func (rr *RoundRobinAlgo) NextServer() uint32 {
+func (rr *roundRobinAlgo) NextServer() uint32 {
 	length := uint32(rr.LengthofReplicas.Load())
 	for {
 		current := rr.Current.Load()
@@ -101,24 +102,101 @@ func (rr *RoundRobinAlgo) NextServer() uint32 {
 	}
 }
 
-func (rr *RoundRobinAlgo) AddBackendCount(length uint32) {
+func (rr *roundRobinAlgo) AddBackendCount(length uint32) {
 	newLength := rr.LengthofReplicas.Load() + length
 	rr.LengthofReplicas.Store(newLength)
 }
 
-type WeightedRoundRobinAlgo struct {
-	//index of the current backend server
-	currentIndex     atomic.Uint32
-
-	LengthofReplicas atomic.Uint32
-	Weights          []uint32
-	CurrentWeight    atomic.Uint32
-	MaxWeight        atomic.Int32
-	// GCD is the greatest common divisor of all weights
-	//divides every weight without a remainder,
-	GCD              uint32
+type node struct {
+	Index         uint32       //current index in the pool
+	Weight        atomic.Int32 // Fixed configured capacity weight
+	CurrentWeight atomic.Int32 // Dynamically adjusted runtime weight
 }
 
-func NewWeightedRoundRobin(length uint32, weights []uint32) *WeightedRoundRobinAlgo { return nil }
-func (wrr *WeightedRoundRobinAlgo) NextServer() uint32                              { return 0 }
-func (wrr *WeightedRoundRobinAlgo) AddBackendCount(length uint32)                   {}
+// Note: Weighted Round Robin can be implemented using Smooth WRR or Standard WRR.
+// Smooth WRR provides smoother load distribution, while Standard WRR is simpler.
+//
+// SmoothWRR manages the load balancing pool.
+type smoothWRRAlgo struct {
+	mu            sync.Mutex
+	nodes         []*node
+	lengthofNodes atomic.Uint32
+}
+
+func NewSmoothWRR(replicas *[]config.Replica) *smoothWRRAlgo {
+	s := make([]*node, 0, len(*replicas))
+	for i, replica := range *replicas {
+		node := &node{
+			Index:         uint32(i),
+			Weight:        atomic.Int32{},
+			CurrentWeight: atomic.Int32{},
+		}
+		if replica.Metadata.Weight != nil {
+			node.Weight.Store(int32(*replica.Metadata.Weight))
+		} else {
+			node.Weight.Store(1)
+		}
+		s = append(s, node)
+	}
+
+	lenghtofNodes := uint32(len(s))
+	wrr := &smoothWRRAlgo{
+		nodes:         s,
+		lengthofNodes: atomic.Uint32{},
+	}
+	wrr.lengthofNodes.Store(lenghtofNodes)
+	return wrr
+}
+
+func (s *smoothWRRAlgo) NextServer() uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var best *node
+	var totalWeight int32
+
+	// 1. Increase the current weight of each peer by its base weight.
+	for _, node := range s.nodes {
+		weight := node.Weight.Load()
+		currentWeight := node.CurrentWeight.Load()
+
+		currentWeight += weight
+		node.CurrentWeight.Store(currentWeight)
+
+		totalWeight += weight
+
+		// 2. Select the peer with the greatest current weight.
+		if best == nil || currentWeight > best.CurrentWeight.Load() {
+			best = node
+		}
+	}
+
+	// 3. Reduce the best peer's current weight by the total weight.
+	best.CurrentWeight.Store(
+		best.CurrentWeight.Load() - totalWeight,
+	)
+
+	return best.Index
+}
+
+func (wrr *smoothWRRAlgo) AddBackendCount(weight uint32) {
+	wrr.mu.Lock()
+	defer wrr.mu.Unlock()
+
+	// The current length is the next available index.
+	index := uint32(len(wrr.nodes))
+
+	newNode := &node{
+		Index:         index,
+		Weight:        atomic.Int32{},
+		CurrentWeight: atomic.Int32{},
+	}
+
+	newNode.Weight.Store(int32(weight))
+	newNode.CurrentWeight.Store(0)
+
+	wrr.nodes = append(wrr.nodes, newNode)
+
+	// Update the total number of nodes.
+	wrr.lengthofNodes.Store(uint32(len(wrr.nodes)))
+}

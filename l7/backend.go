@@ -10,8 +10,7 @@ import (
 type Backend struct {
 	url     *url.URL
 	proxy   *httputil.ReverseProxy
-	matcher string
-	weight  *uint32
+	// weight  *uint32
 }
 
 func NewBackend(url *url.URL, matcher string, weight *uint32) *Backend {
@@ -47,8 +46,7 @@ func NewBackend(url *url.URL, matcher string, weight *uint32) *Backend {
 	return &Backend{
 		url:     url,
 		proxy:   proxy,
-		matcher: matcher,
-		weight: weight,
+		// weight: weight,
 	}
 }
 func (s *Backend) forward(w http.ResponseWriter, r *http.Request) {
