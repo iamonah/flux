@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -34,7 +35,7 @@ func main() {
 		return
 	}
 
-	lb, err := l7.NewL7Proxy(cfg)
+	lb, err := NewFlux(cfg)
 	if err != nil {
 		log.Error().Msg("Failed to create load balancer: " + err.Error())
 		return
@@ -43,7 +44,24 @@ func main() {
 		Addr:    ":" + strconv.Itoa(*port),
 		Handler: lb,
 	}
+	log.Info().Msg(fmt.Sprintf("Starting load balancer on port %d", *port))
 	if err := server.ListenAndServe(); err != nil {
 		log.Error().Msg("Failed to start server: " + err.Error())
+	}
+}
+
+type flux interface {
+	ServeHTTP(w http.ResponseWriter, r *http.Request)
+}
+
+func NewFlux(cfg *config.Config) (flux, error) {
+	if cfg.Mode == nil {
+		return nil, fmt.Errorf("load balancer mode is not specified in the config")
+	}
+	switch *cfg.Mode {
+	case "l7":
+		return l7.Newfluxl7(cfg)
+	default:
+		return nil, fmt.Errorf("unsupported load balancer mode: %s", *cfg.Mode)
 	}
 }

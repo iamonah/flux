@@ -12,7 +12,7 @@ type Metadata struct {
 }
 
 type Replica struct {
-	URL    string  `yaml:"url"`
+	URL      string   `yaml:"url"`
 	Metadata Metadata `yaml:"metadata"`
 }
 type Service struct {
@@ -23,7 +23,7 @@ type Service struct {
 }
 type Config struct {
 	Services        []*Service `yaml:"services"`
-	Mode            string     `yaml:"mode"`
+	Mode            *string    `yaml:"mode"`
 	DefaultStrategy string     `yaml:"default_strategy=round-robin"`
 }
 

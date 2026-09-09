@@ -28,3 +28,4 @@ services:
       - url: http://localhost:8085
       - url: http://localhost:8086
     strategy: round-robin
+mode: l7

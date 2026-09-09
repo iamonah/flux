@@ -47,7 +47,7 @@ services:
 		{URL: backend3.URL},
 	}
 
-	lb, err := NewL7Proxy(cfg)
+	lb, err := Newfluxl7(cfg)
 	if err != nil {
 		t.Fatalf("Failed to create load balancer: %v", err)
 	}

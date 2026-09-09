@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type l7Proxy struct {
+type fluxl7 struct {
 	// Finds the server pool by matcher.
 	//
 	// Note(self): The matcher could be more sophisticated, such as regex
@@ -25,7 +25,7 @@ type l7Proxy struct {
 	proxy httputil.ReverseProxy
 }
 
-func NewL7Proxy(cfg *config.Config) (*l7Proxy, error) {
+func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 	svcPools := make(map[string]*BackendPool)
 
 	for _, service := range cfg.Services {
@@ -41,7 +41,7 @@ func NewL7Proxy(cfg *config.Config) (*l7Proxy, error) {
 		svcPools[service.Matcher] = pool
 	}
 
-	lb := &l7Proxy{
+	lb := &fluxl7{
 		config:      cfg,
 		servicePool: svcPools,
 	}
@@ -83,7 +83,7 @@ func NewL7Proxy(cfg *config.Config) (*l7Proxy, error) {
 	return lb, nil
 }
 
-func (lb *l7Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (lb *fluxl7) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().Msgf("Received new request for %s", r.URL.String())
 
 	log.Info().Msgf(
@@ -99,16 +99,12 @@ func (lb *l7Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Prefix matching is currently O(N) because we iterate over configured
 // matchers. This is fine for now, but I will consider using a trie/radix
 // tree if the number of routes grows significantly.
-func (lb *l7Proxy) findPool(reqPath string) (*BackendPool, bool) {
+func (lb *fluxl7) findPool(reqPath string) (*BackendPool, bool) {
 	log.Info().Msgf("Finding pool for request path: %s", reqPath)
 
 	for matcher, pool := range lb.servicePool {
 		if reqPath == matcher || strings.HasPrefix(reqPath, matcher+"/") {
-			log.Info().Msgf(
-				"Matched request path %s to service %s",
-				reqPath,
-				pool.serviceName,
-			)
+			log.Info().Msgf("Matched request path %s to service %s", reqPath, pool.serviceName)
 
 			return pool, true
 		}
@@ -117,26 +113,17 @@ func (lb *l7Proxy) findPool(reqPath string) (*BackendPool, bool) {
 	return nil, false
 }
 
-func (lb *l7Proxy) selectBackend(r *http.Request) *backend.Backend {
+func (lb *fluxl7) selectBackend(r *http.Request) *backend.Backend {
 	pool, ok := lb.findPool(r.URL.Path)
 	if !ok {
-		log.Warn().Msgf(
-			"No matching service pool found for request path: %s",
-			r.URL.Path,
-		)
-
+		log.Warn().Msgf("No matching service pool found for request path: %s", r.URL.Path)
 		return nil
 	}
 
 	server := pool.getNextBackend()
 	if server == nil {
-		log.Error().Msgf(
-			"No available backends for service %s",
-			pool.serviceName,
-		)
-
+		log.Error().Msgf("No available backends for service %s", pool.serviceName)
 		return nil
 	}
-
 	return server
 }
