@@ -13,6 +13,7 @@ type Backend struct {
 	URL               *url.URL
 	IsAlive           atomic.Bool
 	ActiveConnections atomic.Int32
+	//metadata[weight]
 	Metadata          map[string]string
 }
 

@@ -15,7 +15,6 @@ type DemoServer1 struct {
 
 func (ds *DemoServer1) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	fmt.Println(r.Method, r.URL.Path, r.RemoteAddr, r.Header.Get("X-Forwarded-For"), r.Header.Get("X-Forwarded-Host"), r.Header.Get("X-Forwarded-Proto"))
 	w.Write([]byte("Hello from demo server 1!"))
 }
 

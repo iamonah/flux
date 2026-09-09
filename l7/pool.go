@@ -21,16 +21,12 @@ func (sp *BackendPool) AddSingleBackendToPool(backend *backend.Backend) {
 	sp.mutex.Lock()
 	defer sp.mutex.Unlock()
 	sp.Backends = append(sp.Backends, backend)
-	sp.Strategy.AddBackendCount(backend)
 }
 
 func (sp *BackendPool) AddMultipleBackendToPool(backend []*backend.Backend) {
 	sp.mutex.Lock()
 	defer sp.mutex.Unlock()
 	sp.Backends = append(sp.Backends, backend...)
-	for _, b := range backend {
-		sp.Strategy.AddBackendCount(b)
-	}
 }
 
 func (sp *BackendPool) RemoveBackendFromPool(backend *backend.Backend) {
@@ -51,7 +47,7 @@ func NewBackendPool(svcCfg *config.Service) (*BackendPool, error) {
 		return nil, fmt.Errorf("No replicas defined for service %s", svcCfg.Name)
 	}
 	for _, replica := range svcCfg.Replicas {
-
+	
 		backend, err := backend.NewBackend(&replica)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to create backend: %w", err)

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/iamonah/loadbalancer/backend"
+	"github.com/rs/zerolog/log"
 )
 
 type StrategyType string
@@ -40,10 +41,9 @@ func (s StrategyType) String() string {
 
 type Strategy interface {
 	NextServer(servers []*backend.Backend) *backend.Backend
-	AddBackendCount(server *backend.Backend)
 }
 
-func NewStrategy(strategy *string, replicas []*backend.Backend) (Strategy, error) {
+func NewStrategy(strategy *string, servers []*backend.Backend) (Strategy, error) {
 	if strategy == nil {
 		defaultStrategy := "round-robin"
 		strategy = &defaultStrategy
@@ -51,36 +51,34 @@ func NewStrategy(strategy *string, replicas []*backend.Backend) (Strategy, error
 
 	st, err := ParseStrategyType(*strategy)
 	if err != nil {
-		return nil, err
+		log.Warn().Str("strategy", *strategy).Msg("Unsupported strategy, falling back to round-robin")
+		st = RoundRobin
 	}
 
-	lengthOfReplicas := uint32(len(replicas))
+	lengthOfReplicas := uint32(len(servers))
 
 	switch st {
 	case RoundRobin:
 		return NewRoundRobin(lengthOfReplicas), nil
 
 	case WeightedRoundRobin:
-		return NewSmoothWRR(replicas), nil
+		return NewSmoothWRR(servers), nil
 
-	// case LeastConnections:
-	// 	return NewLeastConnections(), nil
+		// TODO: implement LeastConnections
+		// case LeastConnections:
+		// 	return NewLeastConnections(), nil
 
-	default:
-		return nil, fmt.Errorf("unsupported strategy: %s", *strategy)
 	}
+	return nil, fmt.Errorf("unsupported strategy: %s", *strategy)
 }
 
 type roundRobinAlgo struct {
-	Current          atomic.Uint32
-	LengthofReplicas atomic.Uint32
+	Current atomic.Uint32
 }
 
 func NewRoundRobin(length uint32) *roundRobinAlgo {
 	rr := &roundRobinAlgo{}
-
-	rr.LengthofReplicas.Store(length)
-
+	rr.Current.Store(0)
 	return rr
 }
 
@@ -101,43 +99,56 @@ func (rr *roundRobinAlgo) NextServer(servers []*backend.Backend) *backend.Backen
 	}
 }
 
-func (rr *roundRobinAlgo) AddBackendCount(server *backend.Backend) {
-	newLength := rr.LengthofReplicas.Load() + 1
-	rr.LengthofReplicas.Store(newLength)
-}
-
 type node struct {
 	Server        *backend.Backend
-	Weight        atomic.Int32 // Fixed configured capacity weight
-	CurrentWeight atomic.Int32 // Dynamically adjusted runtime weight
+	Weight        int32 // Fixed configured capacity weight
+	CurrentWeight int32 // Dynamically adjusted runtime weight
 }
 
 // Smooth WRR provides smoother load distribution than standard WRR.
+//
+// It selects the next server using weights that represent
+// the relative compute capacity of each server.
 type smoothWRRAlgo struct {
-	mu            sync.Mutex
-	nodes         []*node
-	lengthofNodes atomic.Uint32
+	mu    sync.Mutex
+	nodes []*node
 }
 
-func NewSmoothWRR(replicas []*backend.Backend) *smoothWRRAlgo {
-	nodes := make([]*node, 0, len(replicas))
+func NewNode(server *backend.Backend, weight int32) *node {
+	return &node{
+		Server:        server,
+		Weight:        weight,
+		CurrentWeight: 0,
+	}
+}
 
-	for _, replica := range replicas {
+func NewSmoothWRR(servers []*backend.Backend) *smoothWRRAlgo {
+	nodes := make([]*node, 0, len(servers))
+
+	for _, server := range servers {
 		node := &node{
-			Server: replica,
+			Server: server,
 		}
 
-		node.Weight.Store(int32(replica.GetMetaOrDefaultInt("weight", 1)))
+		node.Weight = int32(server.GetMetaOrDefaultInt("weight", 1))
+		node.CurrentWeight = 0
 		nodes = append(nodes, node)
 	}
 
 	wrr := &smoothWRRAlgo{
 		nodes: nodes,
 	}
-	wrr.lengthofNodes.Store(uint32(len(nodes)))
 	return wrr
 }
 
+// General overview of how the smooth WRR algorithm works:
+// Server A → weight 5
+// Server B → weight 1
+// The total weight is:
+// 5 + 1 = 6
+// So over a sufficiently large number of requests, the target distribution is approximately:
+// Server A → 5/6 ≈ 83.3% of the Traffic
+// Server B → 1/6 ≈ 16.7% of the Traffic
 func (s *smoothWRRAlgo) NextServer(servers []*backend.Backend) *backend.Backend {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -146,39 +157,43 @@ func (s *smoothWRRAlgo) NextServer(servers []*backend.Backend) *backend.Backend 
 		return nil
 	}
 
+	if !sameServers(s.nodes, servers) {
+		s.nodes = make([]*node, 0, len(servers))
+		for _, server := range servers {
+			node := &node{
+				Server: server,
+			}
+			node.Weight = int32(server.GetMetaOrDefaultInt("weight", 1))
+			node.CurrentWeight = 0
+			s.nodes = append(s.nodes, node)
+		}
+	}
 	var best *node
 	var totalWeight int32
 
-	// Increase the current weight of each peer by its base weight.
 	for _, node := range s.nodes {
-		weight := node.Weight.Load()
+		node.CurrentWeight += node.Weight
+		totalWeight += node.Weight
 
-		currentWeight := node.CurrentWeight.Load()
-		currentWeight += weight
-		node.CurrentWeight.Store(currentWeight)
-
-		totalWeight += weight
-
-		// Select the peer with the greatest current weight.
-		if best == nil || currentWeight > best.CurrentWeight.Load() {
+		if best == nil || node.CurrentWeight > best.CurrentWeight {
 			best = node
 		}
 	}
 
-	// Reduce the best peer's current weight by the total weight.
-	best.CurrentWeight.Store(
-		best.CurrentWeight.Load() - totalWeight,
-	)
-
+	best.CurrentWeight -= totalWeight
 	return best.Server
 }
 
-func (wrr *smoothWRRAlgo) AddBackendCount(server *backend.Backend) {
-	wrr.mu.Lock()
-	defer wrr.mu.Unlock()
-	newNode := &node{}
-	newNode.Server = server
-	newNode.Weight.Store(int32(server.GetMetaOrDefaultInt("weight", 1)))
-	wrr.nodes = append(wrr.nodes, newNode)
-	wrr.lengthofNodes.Store(uint32(len(wrr.nodes)))
+func sameServers(nodes []*node, servers []*backend.Backend) bool {
+	if len(nodes) != len(servers) {
+		return false
+	}
+
+	for i, server := range servers {
+		if nodes[i].Server != server {
+			return false
+		}
+	}
+
+	return true
 }
