@@ -34,7 +34,7 @@ func main() {
 		return
 	}
 
-	lb, err := l7.NewLoadBalancer(cfg)
+	lb, err := l7.NewL7Proxy(cfg)
 	if err != nil {
 		log.Error().Msg("Failed to create load balancer: " + err.Error())
 		return

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/iamonah/loadbalancer/config"
+	"github.com/iamonah/loadbalancer/backend"
 )
 
 type StrategyType string
@@ -30,6 +30,7 @@ func ParseStrategyType(s string) (StrategyType, error) {
 	if !ok {
 		return "", fmt.Errorf("invalid strategy type: %s", s)
 	}
+
 	return st, nil
 }
 
@@ -38,38 +39,35 @@ func (s StrategyType) String() string {
 }
 
 type Strategy interface {
-	NextServer() uint32
-	AddBackendCount(length uint32)
+	NextServer(servers []*backend.Backend) *backend.Backend
+	AddBackendCount(server *backend.Backend)
 }
 
-func NewStrategy(strategy string, replicas *[]config.Replica) (Strategy, error) {
-	st, err := ParseStrategyType(strategy)
+func NewStrategy(strategy *string, replicas []*backend.Backend) (Strategy, error) {
+	if strategy == nil {
+		defaultStrategy := "round-robin"
+		strategy = &defaultStrategy
+	}
+
+	st, err := ParseStrategyType(*strategy)
 	if err != nil {
 		return nil, err
 	}
 
-	lenghtofReplicas := uint32(len(*replicas))
+	lengthOfReplicas := uint32(len(replicas))
+
 	switch st {
 	case RoundRobin:
-		return NewRoundRobin(lenghtofReplicas), nil
+		return NewRoundRobin(lengthOfReplicas), nil
 
 	case WeightedRoundRobin:
-		weights := make([]uint32, lenghtofReplicas)
-		for i, replica := range *replicas {
-			if replica.Metadata.Weight != nil {
-				weights[i] = *replica.Metadata.Weight
-			} else {
-				weights[i] = 1 // Default weight if not specified
-			}
-		}
-
 		return NewSmoothWRR(replicas), nil
 
 	// case LeastConnections:
-	// return NewLeastConnections(), nil
+	// 	return NewLeastConnections(), nil
 
 	default:
-		return nil, fmt.Errorf("unsupported strategy: %s", strategy)
+		return nil, fmt.Errorf("unsupported strategy: %s", *strategy)
 	}
 }
 
@@ -79,124 +77,108 @@ type roundRobinAlgo struct {
 }
 
 func NewRoundRobin(length uint32) *roundRobinAlgo {
-	rr := &roundRobinAlgo{
-		Current:          atomic.Uint32{},
-		LengthofReplicas: atomic.Uint32{},
-	}
+	rr := &roundRobinAlgo{}
+
 	rr.LengthofReplicas.Store(length)
+
 	return rr
 }
 
-func (rr *roundRobinAlgo) NextServer() uint32 {
-	length := uint32(rr.LengthofReplicas.Load())
+func (rr *roundRobinAlgo) NextServer(servers []*backend.Backend) *backend.Backend {
+	length := uint32(len(servers))
+	if length == 0 {
+		return nil
+	}
 	for {
 		current := rr.Current.Load()
 		next := current + 1
-
 		if next >= length {
 			next = 0
 		}
 		if rr.Current.CompareAndSwap(current, next) {
-			return next
+			return servers[next]
 		}
 	}
 }
 
-func (rr *roundRobinAlgo) AddBackendCount(length uint32) {
-	newLength := rr.LengthofReplicas.Load() + length
+func (rr *roundRobinAlgo) AddBackendCount(server *backend.Backend) {
+	newLength := rr.LengthofReplicas.Load() + 1
 	rr.LengthofReplicas.Store(newLength)
 }
 
 type node struct {
-	Index         uint32       //current index in the pool
+	Server        *backend.Backend
 	Weight        atomic.Int32 // Fixed configured capacity weight
 	CurrentWeight atomic.Int32 // Dynamically adjusted runtime weight
 }
 
-// Note: Weighted Round Robin can be implemented using Smooth WRR or Standard WRR.
-// Smooth WRR provides smoother load distribution, while Standard WRR is simpler.
-//
-// SmoothWRR manages the load balancing pool.
+// Smooth WRR provides smoother load distribution than standard WRR.
 type smoothWRRAlgo struct {
 	mu            sync.Mutex
 	nodes         []*node
 	lengthofNodes atomic.Uint32
 }
 
-func NewSmoothWRR(replicas *[]config.Replica) *smoothWRRAlgo {
-	s := make([]*node, 0, len(*replicas))
-	for i, replica := range *replicas {
+func NewSmoothWRR(replicas []*backend.Backend) *smoothWRRAlgo {
+	nodes := make([]*node, 0, len(replicas))
+
+	for _, replica := range replicas {
 		node := &node{
-			Index:         uint32(i),
-			Weight:        atomic.Int32{},
-			CurrentWeight: atomic.Int32{},
+			Server: replica,
 		}
-		if replica.Metadata.Weight != nil {
-			node.Weight.Store(int32(*replica.Metadata.Weight))
-		} else {
-			node.Weight.Store(1)
-		}
-		s = append(s, node)
+
+		node.Weight.Store(int32(replica.GetMetaOrDefaultInt("weight", 1)))
+		nodes = append(nodes, node)
 	}
 
-	lenghtofNodes := uint32(len(s))
 	wrr := &smoothWRRAlgo{
-		nodes:         s,
-		lengthofNodes: atomic.Uint32{},
+		nodes: nodes,
 	}
-	wrr.lengthofNodes.Store(lenghtofNodes)
+	wrr.lengthofNodes.Store(uint32(len(nodes)))
 	return wrr
 }
 
-func (s *smoothWRRAlgo) NextServer() uint32 {
+func (s *smoothWRRAlgo) NextServer(servers []*backend.Backend) *backend.Backend {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if len(s.nodes) == 0 {
+		return nil
+	}
 
 	var best *node
 	var totalWeight int32
 
-	// 1. Increase the current weight of each peer by its base weight.
+	// Increase the current weight of each peer by its base weight.
 	for _, node := range s.nodes {
 		weight := node.Weight.Load()
-		currentWeight := node.CurrentWeight.Load()
 
+		currentWeight := node.CurrentWeight.Load()
 		currentWeight += weight
 		node.CurrentWeight.Store(currentWeight)
 
 		totalWeight += weight
 
-		// 2. Select the peer with the greatest current weight.
+		// Select the peer with the greatest current weight.
 		if best == nil || currentWeight > best.CurrentWeight.Load() {
 			best = node
 		}
 	}
 
-	// 3. Reduce the best peer's current weight by the total weight.
+	// Reduce the best peer's current weight by the total weight.
 	best.CurrentWeight.Store(
 		best.CurrentWeight.Load() - totalWeight,
 	)
 
-	return best.Index
+	return best.Server
 }
 
-func (wrr *smoothWRRAlgo) AddBackendCount(weight uint32) {
+func (wrr *smoothWRRAlgo) AddBackendCount(server *backend.Backend) {
 	wrr.mu.Lock()
 	defer wrr.mu.Unlock()
-
-	// The current length is the next available index.
-	index := uint32(len(wrr.nodes))
-
-	newNode := &node{
-		Index:         index,
-		Weight:        atomic.Int32{},
-		CurrentWeight: atomic.Int32{},
-	}
-
-	newNode.Weight.Store(int32(weight))
-	newNode.CurrentWeight.Store(0)
-
+	newNode := &node{}
+	newNode.Server = server
+	newNode.Weight.Store(int32(server.GetMetaOrDefaultInt("weight", 1)))
 	wrr.nodes = append(wrr.nodes, newNode)
-
-	// Update the total number of nodes.
 	wrr.lengthofNodes.Store(uint32(len(wrr.nodes)))
 }

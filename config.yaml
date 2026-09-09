@@ -8,7 +8,7 @@ services:
     strategy: round-robin
 
   - name: payments-v2
-    matcher: /api/v2/payments
+    matcher: /api/v2/users
     replicas:
       - url: http://localhost:9081
         metadata:

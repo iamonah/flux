@@ -6,9 +6,9 @@ import (
 	"net/http"
 )
 
-var flagPort1 = flag.Int("port1", 8081, "listening port")
-var flagPort2 = flag.Int("port2", 8082, "listening port")
-var flagPort3 = flag.Int("port3", 8083, "listening port")
+var flagPort1 = flag.Int("port1", 9081, "listening port")
+var flagPort2 = flag.Int("port2", 9082, "listening port")
+var flagPort3 = flag.Int("port3", 9083, "listening port")
 
 type DemoServer1 struct {
 }
