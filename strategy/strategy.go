@@ -43,40 +43,42 @@ type Strategy interface {
 	NextServer(servers []*backend.Backend) *backend.Backend
 }
 
-func NewStrategy(strategy *string, servers []*backend.Backend) (Strategy, error) {
-	if strategy == nil {
-		defaultStrategy := "round-robin"
-		strategy = &defaultStrategy
-	}
+var strategyRegistry = make(map[StrategyType]func([]*backend.Backend) Strategy)
 
+// TODO: implement LeastConnections
+// case LeastConnections:
+//
+//	return NewLeastConnections(),
+func init() {
+	strategyRegistry = map[StrategyType]func([]*backend.Backend) Strategy{
+		RoundRobin: func(servers []*backend.Backend) Strategy {
+			return NewRoundRobin()
+		},
+		WeightedRoundRobin: func(servers []*backend.Backend) Strategy {
+			return NewSmoothWRR(servers)
+		},
+	}
+}
+
+func NewStrategy(strategy *string, servers []*backend.Backend) (Strategy, error) {
 	st, err := ParseStrategyType(*strategy)
 	if err != nil {
-		log.Warn().Str("strategy", *strategy).Msg("Unsupported strategy, falling back to round-robin")
+		log.Warn().Str("strategy", *strategy).Msg("strategy initializer not found, falling back to round-robin")
 		st = RoundRobin
 	}
-
-	lengthOfReplicas := uint32(len(servers))
-
-	switch st {
-	case RoundRobin:
-		return NewRoundRobin(lengthOfReplicas), nil
-
-	case WeightedRoundRobin:
-		return NewSmoothWRR(servers), nil
-
-		// TODO: implement LeastConnections
-		// case LeastConnections:
-		// 	return NewLeastConnections(), nil
-
+	strategyRegistry, ok := strategyRegistry[st]
+	if !ok {
+		return nil, fmt.Errorf("strategy not initialized: %s", *strategy)
 	}
-	return nil, fmt.Errorf("unsupported strategy: %s", *strategy)
+
+	return strategyRegistry(servers), nil
 }
 
 type roundRobinAlgo struct {
 	Current atomic.Uint32
 }
 
-func NewRoundRobin(length uint32) *roundRobinAlgo {
+func NewRoundRobin() *roundRobinAlgo {
 	rr := &roundRobinAlgo{}
 	rr.Current.Store(0)
 	return rr
