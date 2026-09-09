@@ -1,87 +1,40 @@
-# **Go Load Balancer**
+# Flux — A Go Load Balancer
 
-The project is designed around a multi-tier architecture: a Layer 4 TCP edge can distribute connections across Layer 7 HTTP reverse proxies, while each Layer 7 instance routes requests to independently managed service backends.
-
-The current implementation is the Layer 7 data plane. Layer 4 proxying, health checks, service discovery, and advanced balancing policies are intentionally being developed next rather than presented as completed features.
+Flux is a multi-tier load balancer built in Go, with a Layer 4 TCP edge for connection-level load balancing and an optional Layer 7 HTTP proxy layer for application-aware routing and service-level load balancing. Each Layer 7 instance routes requests to independently managed service backends. The current implementation is the Layer 7 data plane. Layer 4 proxying, health checks, service discovery, and advanced balancing policies are intentionally being developed next rather than presented as completed features.
 
 ## Architecture
 
-The target architecture separates connection-level routing from application-level routing. This lets the TCP edge scale independently from HTTP processing, which is responsible for path matching, request forwarding, and backend selection.
+The target architecture separates connection-level routing from application-level routing. This lets the TCP edge scale independently from HTTP processing, which is responsible for path matching, request forwarding, and backend selection. Each service maintains its own backend pool, with the load-balancing strategy configured independently per pool.
 
 ```text
-                     Clients
-
-                        |
-
-                        v
-
-                 +--------------+
-
-                 | Layer 4 TCP  |
-
-                 +--------------+
-
-                    /        \
-
-                   v          v
-
-              +--------+  +--------+
-
-              | L7 #1  |  | L7 #2  |
-
-              +--------+  +--------+
-
-                   \        /
-
-                    \      /
-
-                     \    /
-
-                      \  /
-
-                       v
-
-                +----------------+
-
-                | L7 Route Table |
-
-                +----------------+
-
-                  /      |      \
-
-                 v       v       v
-
-             +-------+ +----------+ +--------+
-
-             | Users | | Payments | | Orders |
-
-             +-------+ +----------+ +--------+
-
-                 |          |          |
-
-                 v          v          v
-
-           +---------+ +----------+ +-------------+
-
-           | Round   | | Least    | | Weighted    |
-
-           | Robin   | | Conn.    | | Round Robin |
-
-           +---------+ +----------+ +-------------+
-
-                 |          |          |
-
-                 v          v          v
-
-             +-------+  +-------+  +-------+
-
-             | Pool  |  | Pool  |  | Pool  |
-
-             +-------+  +-------+  +-------+
-
-              /  |  \    /  |  \    /  |  \
-
-             U1 U2 U3   P1 P2 P3   O1 O2 O3
+                                      Clients
+                                          ▼
+                              ┌──────────────────────┐
+                              │       Flux L4        │
+                              │      TCP Edge        │
+                              │   Connection-level   │
+                              │   load balancing     │
+                              └──────────┬───────────┘
+                          ┌──────────────┴─────────────────────┐
+                          ▼                                    ▼
+                ┌─────────────────┐                   ┌─────────────────┐
+                │    Flux L7 #1   │                   │    Flux L7 #2   │
+                │    HTTP Proxy   │                   │    HTTP Proxy   │
+                └────────┬────────┘                   └────────┬────────┘
+                  HTTP routing                           HTTP routing
+            ┌────────────┼────────────┐           ┌────────────┼────────────┐
+            ▼            ▼            ▼           ▼            ▼            ▼
+          Users       Payments      Orders       Users       Payments      Orders
+          Service      Service      Service     Service      Service      Service
+            ▼            ▼            ▼          ▼             ▼             ▼
+        ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
+        │ Users   │  │Payments │  │ Orders  │  │ Users   │  │Payments │  │ Orders  │
+        │  Pool   │  │  Pool   │  │  Pool   │  │  Pool   │  │  Pool   │  │  Pool   │
+        │  RR     │  │  WRR    │  │  RR     │  │  RR     │  │  WRR    │  │  RR     │
+        └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘
+          ┌──┼──┐      ┌──┼──┐      ┌──┼──┐      ┌──┼──┐      ┌──┼──┐      ┌──┼──┐
+          ▼  ▼  ▼      ▼  ▼  ▼      ▼  ▼  ▼      ▼  ▼  ▼      ▼  ▼  ▼      ▼  ▼  ▼
+          R1 R2 R3     R1 R2 R3     R1 R2 R3     R1 R2 R3     R1 R2 R3     R1 R2 R3
 ```
 
 At Layer 7, each configured route owns a `BackendPool`. The pool represents one service and its replicas; it is independent from every other service pool. Incoming requests are matched against their URL path, the selected pool chooses a backend, and an `httputil.ReverseProxy` forwards the request upstream.
@@ -114,37 +67,22 @@ The current path matcher supports exact and prefix matches.
 ## Request Path
 
 ```text
-HTTP request
-
-    |
-
-    v
-
-path matcher
-
-    |
-
-    v
-
-BackendPool
-
-    |
-
-    v
-
-load-balancing strategy
-
-    |
-
-    v
-
-Backend reverse proxy
-
-    |
-
-    v
-
-upstream replica
+                HTTP request
+                    |
+                    v
+                path matcher
+                    |
+                    v
+                BackendPool
+                    |
+                    v
+                load-balancing strategy
+                    |
+                    v
+                Backend reverse proxy
+                    |
+                    v
+                upstream replica
 ```
 
 Each pool delegates backend selection to a strategy. The implemented strategy is round robin: requests are distributed across a service's replicas using an atomic counter. The reverse proxy also replaces client-controlled forwarding headers with verified `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` values.
