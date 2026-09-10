@@ -17,19 +17,28 @@ type BackendPool interface {
 }
 
 type HealthCheck struct {
-	pools    []BackendPool
-	Interval time.Duration //how often to check the health of the backends
-	Client   *http.Client
+	pools        []BackendPool
+	Interval     time.Duration //how often to check the health of the backends
+	Client       *http.Client
+	maxRetries   int
+	initialDelay time.Duration
+	maxDelay     time.Duration
 }
 
 func NewHealthCheck(pools []BackendPool, interval time.Duration) (*HealthCheck, error) {
 	if len(pools) == 0 {
 		return nil, fmt.Errorf("no backend pools defined")
 	}
+	maxRetries := 3
+	initialDelay := 100 * time.Millisecond
+	maxDelay := 1 * time.Second
 
 	return &HealthCheck{
-		pools:    pools,
-		Interval: interval,
+		pools:        pools,
+		Interval:     interval,
+		maxRetries:   maxRetries,
+		initialDelay: initialDelay,
+		maxDelay:     maxDelay,
 		Client: &http.Client{
 			Timeout: 2 * time.Second,
 		},
@@ -59,44 +68,77 @@ func (hc *HealthCheck) checkBackend(pool BackendPool, b *backend.Backend) {
 }
 
 func (hc *HealthCheck) checkTCP(b *backend.Backend) {
-	fmt.Println("Checking backend:", b.URL.String())
+	urlStr := b.URL.String()
 
-	conn, err := net.DialTimeout("tcp", b.URL.Host, 2*time.Second)
-	if err != nil {
-		urlStr := b.URL.String()
-		log.Error().Err(err).Msgf("TCP health check failed: backend %s", urlStr)
-		b.IsAlive.Store(false)
-		return
+	log.Info().Msgf("Checking backend: %s", urlStr)
+
+	for i := 0; i < hc.maxRetries; i++ {
+		conn, err := net.DialTimeout("tcp", b.URL.Host, 2*time.Second)
+
+		if err == nil {
+			_ = conn.Close()
+			b.IsAlive.Store(true)
+			return
+		}
+
+		log.Error().
+			Err(err).
+			Msgf("TCP health check failed: backend %s", urlStr)
+
+		if i == hc.maxRetries-1 {
+			break
+		}
+
+		hc.backoff(i)
 	}
 
-	_ = conn.Close()
-	b.IsAlive.Store(true)
+	b.IsAlive.Store(false)
 }
-
 func (hc *HealthCheck) checkHTTP(b *backend.Backend, path string) {
 	target := b.URL.ResolveReference(&url.URL{
 		Path: path,
 	})
 
 	urlStr := target.String()
+
 	log.Info().Msgf("Checking backend: %s", urlStr)
 
-	resp, err := hc.Client.Get(target.String())
-	if err != nil {
-		log.Error().Err(err).Msg("HTTP health check failed")
-		b.IsAlive.Store(false)
-		return
+	for i := 0; i < hc.maxRetries; i++ {
+		resp, err := hc.Client.Get(urlStr)
+
+		if err == nil {
+			resp.Body.Close()
+
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				b.IsAlive.Store(true)
+				return
+			}
+
+			log.Error().
+				Msgf("HTTP health check failed: backend %s returned status code %d",
+					urlStr, resp.StatusCode)
+		} else {
+			log.Error().
+				Err(err).
+				Msgf("HTTP health check failed: backend %s", urlStr)
+		}
+
+		if i == hc.maxRetries-1 {
+			break
+		}
+
+		hc.backoff(i)
 	}
 
-	defer resp.Body.Close()
+	b.IsAlive.Store(false)
+}
 
-	// Consider any 2xx status code as healthy
-	alive := resp.StatusCode >= 200 && resp.StatusCode < 300
-	b.IsAlive.Store(alive)
-	if !alive {
-		b.FailCount.Add(1)
-	} else {
-		b.SuccessCount.Add(1)
+func (hc *HealthCheck) backoff(attempt int) {
+	delay := hc.initialDelay * time.Duration(1<<attempt)
+
+	if delay > hc.maxDelay {
+		delay = hc.maxDelay
 	}
 
+	time.Sleep(delay)
 }

@@ -1,6 +1,8 @@
 # Flux — A Go Load Balancer
 
-Flux is a multi-tier load balancer built in Go, with a Layer 4 TCP edge for connection-level load balancing and an optional Layer 7 HTTP proxy layer for application-aware routing and service-level load balancing. Each Layer 7 instance routes requests to independently managed service backends. The current implementation is the Layer 7 data plane. Layer 4 proxying, health checks, service discovery, and advanced balancing policies are intentionally being developed next rather than presented as completed features.
+Flux is a multi-tier load balancer built in Go, with a Layer 4 TCP edge for connection-level load balancing and an optional Layer 7 HTTP proxy layer for application-aware routing and service-level load balancing. Each Layer 7 instance routes requests to independently managed service backends.
+
+The current implementation is the Layer 7 data plane. Layer 4 proxying, service discovery, and additional balancing policies are being developed next.
 
 ## Architecture
 
@@ -23,6 +25,7 @@ The target architecture separates connection-level routing from application-leve
                 └────────┬────────┘                   └────────┬────────┘
                   HTTP routing                           HTTP routing
             ┌────────────┼────────────┐           ┌────────────┼────────────┐
+
             ▼            ▼            ▼           ▼            ▼            ▼
           Users       Payments      Orders       Users       Payments      Orders
           Service      Service      Service     Service      Service      Service
@@ -30,7 +33,7 @@ The target architecture separates connection-level routing from application-leve
         ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐
         │ Users   │  │Payments │  │ Orders  │  │ Users   │  │Payments │  │ Orders  │
         │  Pool   │  │  Pool   │  │  Pool   │  │  Pool   │  │  Pool   │  │  Pool   │
-        │  RR     │  │  WRR    │  │  RR     │  │  RR     │  │  WRR    │  │  RR     │
+        │   RR    │  │   WRR   │  │   RR    │  │   RR    │  │   WRR   │  │   RR    │
         └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘
           ┌──┼──┐      ┌──┼──┐      ┌──┼──┐      ┌──┼──┐      ┌──┼──┐      ┌──┼──┐
           ▼  ▼  ▼      ▼  ▼  ▼      ▼  ▼  ▼      ▼  ▼  ▼      ▼  ▼  ▼      ▼  ▼  ▼
@@ -41,169 +44,137 @@ At Layer 7, each configured route owns a `BackendPool`. The pool represents one 
 
 The current path matcher supports exact and prefix matches.
 
-## Feature Scope
+## Features
 
-### Layer 4 — planned
+* **Modes** — `l7`, with `l4` planned
+* **Load-balancing strategies** — `round-robin`, `weighted-round-robin`
+* **HTTP reverse proxy** — forwards requests to configured backend services
+* **Path-based routing** — supports exact and prefix path matching
+* **Per-service backend pools** — each service maintains its own independent pool of replicas
+* **Health checks** — HTTP health endpoints or TCP connection checks with exponential-backoff retries
+* **Forwarded headers** — manages `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto`
+<!-- * **Pluggable strategies** — balancing strategies are selected per service through the strategy registry -->
 
-* TCP proxying for connection-level traffic forwarding
-* 5-tuple-based backend selection
+## Roadmap
 
-### Layer 7
+* **Layer 4 TCP proxy**
 
-* HTTP reverse proxying to configured backend services
-* Application-aware routing through request path matchers
-* Per-service backend pools and pluggable balancing strategies
-* Round-robin request distribution
-* Forwarded-header management for proxied requests
+  * TCP connection-level load balancing
+  * 5-tuple-based backend selection
 
-### Reliability and Operations — planned
+* **Load-balancing strategies**
 
-* Active backend health checks and unhealthy-backend removal
-* Failure handling and request retries where appropriate
-* Dynamic backend management and service discovery
-* Additional strategies, including least-connections and weighted round robin
-* Pool coordination using a Left-Right wait-free pattern for read-heavy traffic
+  * Least-connections
+  * Additional balancing policies
+
+* **Service discovery**
+
+  * Dynamic backend discovery
+  * Consul integration
+  * Kubernetes service discovery
+
+* **Pool coordination**
+
+  * Distributed backend-pool coordination
+  * Left-Right wait-free synchronization for read-heavy workloads
+
+* **Reliability**
+
+  * Passive health checks
+  * Advanced failure handling and retry policies
+  * Backend state tracking and recovery
 
 ## Request Path
 
 ```text
                 HTTP request
+
                     |
+
                     v
+
                 path matcher
+
                     |
+
                     v
+
                 BackendPool
+
                     |
+
                     v
+
                 load-balancing strategy
+
                     |
+
                     v
+
                 Backend reverse proxy
+
                     |
+
                     v
+
                 upstream replica
 ```
 
-Each pool delegates backend selection to a strategy. The implemented strategy is round robin: requests are distributed across a service's replicas using an atomic counter. The reverse proxy also replaces client-controlled forwarding headers with verified `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` values.
+Each pool delegates backend selection to its configured strategy. Round robin distributes requests across replicas using an atomic counter, while weighted round robin distributes requests according to each replica's configured weight.
+
+The reverse proxy also replaces client-controlled forwarding headers with verified `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` values.
 
 ## Pool Coordination
 
-Each `BackendPool` owns the strategy selected for its service. This keeps backend selection independent: one service can use round robin while another uses a different strategy as those implementations are added.
+Each `BackendPool` owns the strategy selected for its service. This keeps backend selection independent: one service can use round robin while another uses weighted round robin.
 
-The current round-robin implementation uses atomic state so concurrent requests can advance its selection index safely. Backend-pool access uses an `RWMutex`, providing a safe foundation for dynamic backend management and health checking. Weighted round robin and least-connections remain planned strategy implementations.
+The current round-robin implementation uses atomic state so concurrent requests can advance its selection index safely. Backend-pool access uses an `RWMutex`, providing a safe foundation for concurrent backend access, health checking, and future dynamic backend management.
 
 ## Configuration
 
-Services are declared in `config.yaml`. Each service defines a name, route matcher, load balancing strategy, and one or more replicas.
-
-### Single Service
-
-A configuration with a single service can be defined as:
+Flux is configured through `config.yaml`.
 
 ```yaml
+mode: l7
+
 services:
-  - name: payments
-    matcher: /payments
-    strategy: round-robin
+  - name: payments-v1
+    matcher: /api/v1/payments
+
+    health_check:
+      path: /health
+
     replicas:
-      - http://localhost:8081
-      - http://localhost:8082
-```
+      - url: http://localhost:8081
+      - url: http://localhost:8082
+      - url: http://localhost:8083
 
-### Multiple Services
-
-Multiple services can be configured independently. Each service maintains its own replica pool and load balancing strategy.
-
-```yaml
-services:
-  - name: payments
-    matcher: /api/payments
-    strategy: round-robin
-    replicas:
-      - http://localhost:8081
-      - http://localhost:8082
-
-  - name: users
-    matcher: /api/users
-    strategy: round-robin
-    replicas:
-      - http://localhost:8083
-      - http://localhost:8084
-```
-
-Requests matching `/api/payments` are distributed only across the `payments` replicas, while requests matching `/api/users` are distributed only across the `users` replicas.
-
-### Round Robin
-
-A service using round robin lists its replicas directly:
-
-```yaml
-services:
-  - name: payments
-    matcher: /api/payments
-    strategy: round-robin
-    replicas:
-      - http://localhost:8081
-      - http://localhost:8082
-      - http://localhost:8083
-```
-
-Each replica participates equally in the rotation.
-
-### Weighted Round Robin
-
-A service using weighted round robin assigns a weight to each replica:
-
-```yaml
-services:
-  - name: payments
-    matcher: /api/payments
+  - name: payments-v2
+    matcher: /api/v2/payments
     strategy: weighted-round-robin
+
+    health_check:
+      path: /health
+
     replicas:
-      - address: http://localhost:8081
-        weight: 3
-      - address: http://localhost:8082
-        weight: 2
-      - address: http://localhost:8083
-        weight: 1
+      - url: http://localhost:9081
+        metadata:
+          weight: 1
+
+      - url: http://localhost:9082
+        metadata:
+          weight: 2
+
+      - url: http://localhost:9083
+        metadata:
+          weight: 1
 ```
 
-The weight determines the replica's relative share of requests.
+The `strategy` field is optional. When omitted, Flux uses its default load-balancing strategy.
 
-For the configuration above, the relative distribution is:
+Each service can configure its own strategy independently.
 
-```text
-localhost:8081 → 3
-localhost:8082 → 2
-localhost:8083 → 1
-```
-
-The weights are relative values rather than percentages. Therefore, `3:2:1` and `30:20:10` represent the same distribution.
-
-Each service can define its own strategy independently:
-
-```yaml
-services:
-  - name: payments
-    matcher: /api/payments
-    strategy: round-robin
-    replicas:
-      - http://localhost:8081
-      - http://localhost:8082
-
-  - name: users
-    matcher: /api/users
-    strategy: weighted-round-robin
-    replicas:
-      - address: http://localhost:8083
-        weight: 2
-      - address: http://localhost:8084
-        weight: 1
-```
-
-This allows balancing to be configured at the service level rather than globally across all replicas.
-
+When `health_check.path` is configured, Flux performs an HTTP health check against the specified endpoint. If no health-check path is configured, Flux falls back to a TCP connection check against the backend host and port.
 
 ## Run Locally
 

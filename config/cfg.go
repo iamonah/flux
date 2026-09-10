@@ -31,7 +31,6 @@ type Service struct {
 type Config struct {
 	Services        []*Service `yaml:"services"`
 	Mode            *string    `yaml:"mode,omitempty"`
-	DefaultStrategy string     `yaml:"default_strategy"`
 }
 
 func LoadConfig(reader io.Reader) (*Config, error) {

@@ -45,7 +45,7 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 		pools = append(pools, pool)
 	}
 
-	hc, err := health.NewHealthCheck(pools, 2*time.Second)
+	hc, err := health.NewHealthCheck(pools, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create health checker: %w", err)
 	}
