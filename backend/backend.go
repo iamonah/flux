@@ -4,17 +4,21 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"sync"
 	"sync/atomic"
 
 	"github.com/iamonah/loadbalancer/config"
 )
 
 type Backend struct {
-	URL               *url.URL
+	URL *url.URL
+
+	mutex             sync.RWMutex
 	IsAlive           atomic.Bool
 	ActiveConnections atomic.Int32
-	//metadata[weight]
 	Metadata          map[string]string
+	FailCount         atomic.Int32
+	SuccessCount      atomic.Int32
 }
 
 // GetMetaOrDefault returns the value associated with the given key in the
@@ -38,6 +42,10 @@ func (s *Backend) GetMetaOrDefaultInt(key string, def int) int {
 	return a
 }
 
+func (s *Backend) GetActiveConnections() int32 {
+	return s.ActiveConnections.Load()
+}
+
 func NewBackend(cfg *config.Replica) (*Backend, error) {
 	parsedURL, err := url.Parse(cfg.URL)
 	if err != nil {
@@ -47,8 +55,10 @@ func NewBackend(cfg *config.Replica) (*Backend, error) {
 	if cfg.Metadata.Weight != nil {
 		metadata["weight"] = fmt.Sprintf("%d", *cfg.Metadata.Weight)
 	}
-	return &Backend{
+	backend := &Backend{
 		URL:      parsedURL,
 		Metadata: metadata,
-	}, nil
+	}
+
+	return backend, nil
 }
