@@ -22,7 +22,6 @@ var (
 func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	flag.Parse()
-
 	file, err := os.ReadFile(*configFile)
 	if err != nil {
 		log.Fatal().Msg("Failed to open config file: " + err.Error())
@@ -55,6 +54,7 @@ type flux interface {
 }
 
 func NewFlux(cfg *config.Config) (flux, error) {
+	fmt.Println(cfg.Mode)
 	if cfg.Mode == nil {
 		return nil, fmt.Errorf("load balancer mode is not specified in the config")
 	}

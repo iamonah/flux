@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"strings"
+	"time"
 
 	"github.com/iamonah/loadbalancer/backend"
 	"github.com/iamonah/loadbalancer/config"
+	"github.com/iamonah/loadbalancer/util/health"
 	"github.com/rs/zerolog/log"
 )
 
@@ -27,6 +29,7 @@ type fluxl7 struct {
 
 func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 	svcPools := make(map[string]*BackendPool)
+	pools := make([]health.BackendPool, 0, len(cfg.Services))
 
 	for _, service := range cfg.Services {
 		pool, err := NewBackendPool(service)
@@ -39,7 +42,15 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 		}
 
 		svcPools[service.Matcher] = pool
+		pools = append(pools, pool)
 	}
+
+	hc, err := health.NewHealthCheck(pools, 2*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create health checker: %w", err)
+	}
+
+	go hc.Start()
 
 	lb := &fluxl7{
 		config:      cfg,
@@ -83,6 +94,7 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 	return lb, nil
 }
 
+// ServeHTTP implements http.Handler.
 func (lb *fluxl7) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().Msgf("Received new request for %s", r.URL.String())
 
@@ -104,7 +116,11 @@ func (lb *fluxl7) findPool(reqPath string) (*BackendPool, bool) {
 
 	for matcher, pool := range lb.servicePool {
 		if reqPath == matcher || strings.HasPrefix(reqPath, matcher+"/") {
-			log.Info().Msgf("Matched request path %s to service %s", reqPath, pool.serviceName)
+			log.Info().Msgf(
+				"Matched request path %s to service %s",
+				reqPath,
+				pool.serviceName,
+			)
 
 			return pool, true
 		}
@@ -116,14 +132,23 @@ func (lb *fluxl7) findPool(reqPath string) (*BackendPool, bool) {
 func (lb *fluxl7) selectBackend(r *http.Request) *backend.Backend {
 	pool, ok := lb.findPool(r.URL.Path)
 	if !ok {
-		log.Warn().Msgf("No matching service pool found for request path: %s", r.URL.Path)
+		log.Warn().Msgf(
+			"No matching service pool found for request path: %s",
+			r.URL.Path,
+		)
+
 		return nil
 	}
 
 	server := pool.getNextBackend()
 	if server == nil {
-		log.Error().Msgf("No available backends for service %s", pool.serviceName)
+		log.Error().Msgf(
+			"No available backends for service %s",
+			pool.serviceName,
+		)
+
 		return nil
 	}
+
 	return server
 }

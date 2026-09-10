@@ -12,28 +12,43 @@ import (
 type BackendPool struct {
 	serviceName string
 
-	mutex    sync.RWMutex
-	Backends []*backend.Backend
-	Strategy strategy.Strategy
+	mutex           sync.RWMutex
+	Backends        []*backend.Backend
+	Strategy        strategy.Strategy
+	HealthCheckPath *string
 }
 
-func (sp *BackendPool) AddSingleBackendToPool(backend *backend.Backend) {
+func (sp *BackendPool) GetBackends() []*backend.Backend {
+	sp.mutex.RLock()
+	defer sp.mutex.RUnlock()
+
+	return sp.Backends
+}
+
+func (sp *BackendPool) GetHealthCheckPath() *string {
+	if sp.HealthCheckPath == nil {
+		return nil
+	}
+	return sp.HealthCheckPath
+}
+
+func (sp *BackendPool) AddSingleBackendToPool(b *backend.Backend) {
 	sp.mutex.Lock()
 	defer sp.mutex.Unlock()
-	sp.Backends = append(sp.Backends, backend)
+	sp.Backends = append(sp.Backends, b)
 }
 
-func (sp *BackendPool) AddMultipleBackendToPool(backend []*backend.Backend) {
+func (sp *BackendPool) AddMultipleBackendToPool(backends []*backend.Backend) {
 	sp.mutex.Lock()
 	defer sp.mutex.Unlock()
-	sp.Backends = append(sp.Backends, backend...)
+	sp.Backends = append(sp.Backends, backends...)
 }
 
-func (sp *BackendPool) RemoveBackendFromPool(backend *backend.Backend) {
+func (sp *BackendPool) RemoveBackendFromPool(target *backend.Backend) {
 	sp.mutex.Lock()
 	defer sp.mutex.Unlock()
 	for i, b := range sp.Backends {
-		if b == backend {
+		if b == target {
 			sp.Backends = append(sp.Backends[:i], sp.Backends[i+1:]...)
 			return
 		}
@@ -44,23 +59,35 @@ func NewBackendPool(svcCfg *config.Service) (*BackendPool, error) {
 	backends := make([]*backend.Backend, 0, len(svcCfg.Replicas))
 
 	if len(svcCfg.Replicas) == 0 {
-		return nil, fmt.Errorf("No replicas defined for service %s", svcCfg.Name)
+		return nil, fmt.Errorf("no replicas defined for service %s", svcCfg.Name)
 	}
+
 	for _, replica := range svcCfg.Replicas {
-	
-		backend, err := backend.NewBackend(&replica)
+		b, err := backend.NewBackend(&replica)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to create backend: %w", err)
+			return nil, fmt.Errorf("failed to create backend: %w", err)
 		}
-		backends = append(backends, backend)
+		backends = append(backends, b)
 	}
 
-	strategy, err := strategy.NewStrategy(svcCfg.Strategy, backends)
+	strat, err := strategy.NewStrategy(svcCfg.Strategy, backends)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to create strategy: %w", err)
+		return nil, fmt.Errorf("failed to create strategy: %w", err)
 	}
 
-	return &BackendPool{serviceName: svcCfg.Name, Backends: backends, Strategy: strategy}, nil
+	if svcCfg.HealthCheck == nil {
+		return &BackendPool{
+			serviceName: svcCfg.Name,
+			Backends:    backends,
+			Strategy:    strat,
+		}, nil
+	}
+	return &BackendPool{
+		serviceName:     svcCfg.Name,
+		Backends:        backends,
+		Strategy:        strat,
+		HealthCheckPath: &svcCfg.HealthCheck.Path,
+	}, nil
 }
 
 func (sp *BackendPool) getNextBackend() *backend.Backend {
