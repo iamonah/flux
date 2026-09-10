@@ -6,44 +6,41 @@ import (
 	"net/http"
 )
 
-var flagPort1 = flag.Int("port1", 9081, "listening port")
-var flagPort2 = flag.Int("port2", 9082, "listening port")
-var flagPort3 = flag.Int("port3", 9083, "listening port")
 
-type DemoServer1 struct {
+// var flagPort1 = flag.Int("port1", 8081, "listening port")
+var flagPort2 = flag.Int("port2", 8082, "listening port")
+var flagPort3 = flag.Int("port3", 8083, "listening port")
+var flagPort4 = flag.Int("port4", 9081, "listening port")
+var flagPort5 = flag.Int("port5", 9082, "listening port")
+var flagPort6 = flag.Int("port6", 9083, "listening port")
+
+func startServer(port int, name string) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)	
+		fmt.Fprintf(w, "Hello from %s!", name)
+	})
+
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), mux); err != nil {
+		fmt.Printf("%s stopped: %v\n", name, err)
+	}
 }
 
-func (ds *DemoServer1) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Hello from demo server 1!"))
-}
-
-type DemoServer2 struct {
-}
-
-func (ds *DemoServer2) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Hello from demo server 2!"))
-}
-
-type DemoServer3 struct {
-}
-
-func (ds *DemoServer3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Hello from demo server 3!"))
-}
 func main() {
 	flag.Parse()
-	ds1 := &DemoServer1{}
-	ds2 := &DemoServer2{}
-	ds3 := &DemoServer3{}
-	go http.ListenAndServe(fmt.Sprintf(":%d", *flagPort1), ds1)
-	go http.ListenAndServe(fmt.Sprintf(":%d", *flagPort3), ds3)
-	err := http.ListenAndServe(
-		fmt.Sprintf(":%d", *flagPort2),
-		ds2,
-	)
 
-	fmt.Println("server stopped:", err)
+	// go startServer(*flagPort1, "demo server 1")
+	go startServer(*flagPort2, "demo server 2")
+	go startServer(*flagPort3, "demo server 3")
+	go startServer(*flagPort4, "demo server 4")
+	go startServer(*flagPort5, "demo server 5")
+	go startServer(*flagPort6, "demo server 6")
+
+	select {}
 }
