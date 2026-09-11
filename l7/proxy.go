@@ -140,15 +140,15 @@ func (lb *fluxl7) selectBackend(r *http.Request) *backend.Backend {
 		return nil
 	}
 
-	server := pool.getNextBackend()
-	if server == nil {
+	healthyBackends := pool.GetHealthBackends()
+
+	if len(healthyBackends) == 0 {
 		log.Error().Msgf(
-			"No available backends for service %s",
+			"No healthy backends available for service %s",
 			pool.serviceName,
 		)
-
 		return nil
 	}
 
-	return server
+	return pool.getNextBackend(healthyBackends)
 }

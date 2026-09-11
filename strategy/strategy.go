@@ -61,6 +61,9 @@ func init() {
 }
 
 func NewStrategy(strategy *string, servers []*backend.Backend) (Strategy, error) {
+	if strategy == nil {
+		return NewRoundRobin(), nil
+	}
 	st, err := ParseStrategyType(*strategy)
 	if err != nil {
 		log.Warn().Str("strategy", *strategy).Msg("strategy initializer not found, falling back to round-robin")

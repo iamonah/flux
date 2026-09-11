@@ -22,7 +22,28 @@ func (sp *BackendPool) GetBackends() []*backend.Backend {
 	sp.mutex.RLock()
 	defer sp.mutex.RUnlock()
 
-	return sp.Backends
+	backends := make([]*backend.Backend, len(sp.Backends))
+	copy(backends, sp.Backends)
+
+	return backends
+}
+
+func (sp *BackendPool) GetHealthBackends() []*backend.Backend {
+	sp.mutex.RLock()
+	defer sp.mutex.RUnlock()
+
+	healthyBackends := make([]*backend.Backend, 0, len(sp.Backends))
+	for _, b := range sp.Backends {
+		if b.IsAlive.Load() {
+			healthyBackends = append(healthyBackends, b)
+		}
+	}
+
+	return healthyBackends
+}
+
+func (sp *BackendPool) GetServiceName() string {
+	return sp.serviceName
 }
 
 func (sp *BackendPool) GetHealthCheckPath() *string {
@@ -90,8 +111,8 @@ func NewBackendPool(svcCfg *config.Service) (*BackendPool, error) {
 	}, nil
 }
 
-func (sp *BackendPool) getNextBackend() *backend.Backend {
+func (sp *BackendPool) getNextBackend(healthyBackends []*backend.Backend) *backend.Backend {
 	sp.mutex.RLock()
 	defer sp.mutex.RUnlock()
-	return sp.Strategy.NextServer(sp.Backends)
+	return sp.Strategy.NextServer(healthyBackends)
 }
