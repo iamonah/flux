@@ -44,8 +44,16 @@ func main() {
 		Handler: lb,
 	}
 	log.Info().Msg(fmt.Sprintf("Starting load balancer on port %d", *port))
-	if err := server.ListenAndServe(); err != nil {
-		log.Error().Msg("Failed to start server: " + err.Error())
+
+	if cfg.TLS.Enable && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
+		log.Info().Msg("TLS Termination enabled.")
+		err = server.ListenAndServeTLS(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+	} else {
+		err = server.ListenAndServe()
+	}
+
+	if err != nil && err != http.ErrServerClosed {
+		log.Fatal().Msg("Failed to start flux server: " + err.Error())
 	}
 }
 
@@ -54,13 +62,14 @@ type flux interface {
 }
 
 func NewFlux(cfg *config.Config) (flux, error) {
-	fmt.Println(cfg.Mode)
 	if cfg.Mode == nil {
 		return nil, fmt.Errorf("load balancer mode is not specified in the config")
 	}
 	switch *cfg.Mode {
 	case "l7":
 		return l7.Newfluxl7(cfg)
+	case "l4":
+		return nil, fmt.Errorf("l4 mode is not implemented yet")
 	default:
 		return nil, fmt.Errorf("unsupported load balancer mode: %s", *cfg.Mode)
 	}

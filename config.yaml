@@ -33,3 +33,8 @@ services:
       - url: http://localhost:8085
       - url: http://localhost:8086
 mode: l7
+max_retries: 3
+tls:
+  enabled: true
+  cert_file: ./certs/server.crt
+  key_file: ./certs/server.key

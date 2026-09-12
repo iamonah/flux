@@ -7,12 +7,19 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+type TLSConfig struct {
+	Enable   bool   `yaml:"enabled"`
+	CertFile string `yaml:"cert_file,omitempty"`
+	KeyFile  string `yaml:"key_file,omitempty"`
+}
+
 type HealthCheckConfig struct {
 	Path string `yaml:"path"`
 }
 
 type Metadata struct {
-	Weight *uint32 `yaml:"weight"`
+	Weight     *uint32 `yaml:"weight"`
+	MaxRetries *uint32 `yaml:"max_retries"` //default: 3
 }
 
 type Replica struct {
@@ -29,8 +36,9 @@ type Service struct {
 }
 
 type Config struct {
-	Services        []*Service `yaml:"services"`
-	Mode            *string    `yaml:"mode,omitempty"`
+	Services []*Service `yaml:"services"`
+	Mode     *string    `yaml:"mode,omitempty"`
+	TLS      TLSConfig  `yaml:"tls,omitempty"`
 }
 
 func LoadConfig(reader io.Reader) (*Config, error) {
