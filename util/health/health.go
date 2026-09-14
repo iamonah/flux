@@ -43,14 +43,28 @@ func NewHealthCheck(pools []BackendPool, interval time.Duration) (*HealthCheck, 
 }
 
 func (hc *HealthCheck) Start() {
+	hc.checkAllBackendsSync()
+
 	ticker := time.NewTicker(hc.Interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		for _, pool := range hc.pools {
-			for _, b := range pool.GetBackends() {
-				go hc.checkBackend(pool, b)
-			}
+		hc.checkAllBackends()
+	}
+}
+
+func (hc *HealthCheck) checkAllBackendsSync() {
+	for _, pool := range hc.pools {
+		for _, b := range pool.GetBackends() {
+			hc.checkBackend(pool, b)
+		}
+	}
+}
+
+func (hc *HealthCheck) checkAllBackends() {
+	for _, pool := range hc.pools {
+		for _, b := range pool.GetBackends() {
+			go hc.checkBackend(pool, b)
 		}
 	}
 }

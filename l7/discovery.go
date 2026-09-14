@@ -26,8 +26,6 @@ func NewServiceDiscovery(d consul.Discovery, pools []*BackendPool, interval time
 }
 
 func (sd *ServiceDiscovery) Start(ctx context.Context) {
-	sd.discover(ctx)
-
 	ticker := time.NewTicker(sd.interval)
 	defer ticker.Stop()
 
