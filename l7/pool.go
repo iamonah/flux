@@ -28,7 +28,7 @@ func (sp *BackendPool) GetBackends() []*backend.Backend {
 	return backends
 }
 
-func (sp *BackendPool) GetHealthBackends() []*backend.Backend {
+func (sp *BackendPool) GetHealthyBackends() []*backend.Backend {
 	sp.mutex.RLock()
 	defer sp.mutex.RUnlock()
 
@@ -51,6 +51,13 @@ func (sp *BackendPool) GetHealthCheckPath() *string {
 		return nil
 	}
 	return sp.HealthCheckPath
+}
+
+func (sp *BackendPool) ReplaceBackends(backends []*backend.Backend) {
+	sp.mutex.Lock()
+	defer sp.mutex.Unlock()
+
+	sp.Backends = backends
 }
 
 func (sp *BackendPool) AddSingleBackendToPool(b *backend.Backend) {
@@ -77,19 +84,7 @@ func (sp *BackendPool) RemoveBackendFromPool(target *backend.Backend) {
 }
 
 func NewBackendPool(svcCfg *config.Service) (*BackendPool, error) {
-	backends := make([]*backend.Backend, 0, len(svcCfg.Replicas))
-
-	if len(svcCfg.Replicas) == 0 {
-		return nil, fmt.Errorf("no replicas defined for service %s", svcCfg.Name)
-	}
-
-	for _, replica := range svcCfg.Replicas {
-		b, err := backend.NewBackend(&replica)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create backend: %w", err)
-		}
-		backends = append(backends, b)
-	}
+	var backends []*backend.Backend
 
 	strat, err := strategy.NewStrategy(svcCfg.Strategy, backends)
 	if err != nil {
@@ -103,12 +98,17 @@ func NewBackendPool(svcCfg *config.Service) (*BackendPool, error) {
 			Strategy:    strat,
 		}, nil
 	}
-	return &BackendPool{
+	pool:=  &BackendPool{
 		serviceName:     svcCfg.Name,
 		Backends:        backends,
 		Strategy:        strat,
 		HealthCheckPath: &svcCfg.HealthCheck.Path,
-	}, nil
+	}
+	
+	if svcCfg.HealthCheck != nil {
+		pool.HealthCheckPath = &svcCfg.HealthCheck.Path
+	}
+	return pool, nil
 }
 
 func (sp *BackendPool) getNextBackend(healthyBackends []*backend.Backend) *backend.Backend {

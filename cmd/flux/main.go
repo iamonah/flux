@@ -20,8 +20,9 @@ var (
 )
 
 func main() {
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	flag.Parse()
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+
 	file, err := os.ReadFile(*configFile)
 	if err != nil {
 		log.Fatal().Msg("Failed to open config file: " + err.Error())
@@ -30,15 +31,15 @@ func main() {
 	filedata := strings.NewReader(string(file))
 	cfg, err := config.LoadConfig(filedata)
 	if err != nil {
-		log.Error().Msg("Failed to load config: " + err.Error())
-		return
+		log.Fatal().Msg("Failed to load config: " + err.Error())
 	}
 
 	lb, err := NewFlux(cfg)
 	if err != nil {
-		log.Error().Msg("Failed to create load balancer: " + err.Error())
+		log.Fatal().Msg("Failed to create load balancer: " + err.Error())
 		return
 	}
+
 	server := http.Server{
 		Addr:    ":" + strconv.Itoa(*port),
 		Handler: lb,
@@ -74,3 +75,5 @@ func NewFlux(cfg *config.Config) (flux, error) {
 		return nil, fmt.Errorf("unsupported load balancer mode: %s", *cfg.Mode)
 	}
 }
+
+//

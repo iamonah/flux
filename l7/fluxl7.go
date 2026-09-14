@@ -10,7 +10,7 @@ import (
 
 	"github.com/iamonah/loadbalancer/backend"
 	"github.com/iamonah/loadbalancer/config"
-	"github.com/iamonah/loadbalancer/util/discovery"
+	"github.com/iamonah/loadbalancer/util/consul"
 	"github.com/iamonah/loadbalancer/util/health"
 	"github.com/rs/zerolog/log"
 )
@@ -24,9 +24,8 @@ type fluxl7 struct {
 
 	// This could later come from an external config file or service discovery mechanism.
 	config    *config.Config
-	registry  discovery.Registry
-
-	proxy httputil.ReverseProxy
+	discovery consul.Discovery
+	proxy     httputil.ReverseProxy
 }
 
 type selectedBackendKey struct{}
@@ -40,7 +39,11 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 	for _, service := range cfg.Services {
 		pool, err := NewBackendPool(service)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create server pool for service %s: %w", service.Name, err)
+			return nil, fmt.Errorf(
+				"failed to create server pool for service %s: %w",
+				service.Name,
+				err,
+			)
 		}
 
 		svcPools[service.Matcher] = pool
@@ -54,10 +57,31 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 
 	go hc.Start()
 
+	registry, err := consul.NewRegistry("localhost:8500")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service discovery: %w", err)
+	}
+
 	lb := &fluxl7{
 		config:      cfg,
 		servicePool: svcPools,
+		discovery:   registry,
 	}
+
+	// Start service discovery.
+	discoveryPools := make([]*BackendPool, 0, len(svcPools))
+
+	for _, pool := range svcPools {
+		discoveryPools = append(discoveryPools, pool)
+	}
+
+	serviceDiscovery := NewServiceDiscovery(
+		lb.discovery,
+		discoveryPools,
+		10*time.Second,
+	)
+
+	go serviceDiscovery.Start(context.Background())
 
 	lb.proxy = httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -70,8 +94,10 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 			}
 
 			pr.SetURL(selected.URL)
+
 			// Prevent clients from injecting internal proxy headers.
 			pr.Out.Header.Del("X-Internal-Secret")
+
 			// Set trusted forwarding headers based on the incoming request.
 			pr.SetXForwarded()
 		},
@@ -92,7 +118,13 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 // ServeHTTP implements http.Handler.
 func (lb *fluxl7) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().Msgf("Received new request for %s", r.URL.String())
-	log.Info().Msgf("L7 Proxy routing request: path: %s host: %s scheme: %s", r.URL.Path, r.Host, r.URL.Scheme)
+
+	log.Info().Msgf(
+		"L7 Proxy routing request: path: %s host: %s scheme: %s",
+		r.URL.Path,
+		r.Host,
+		r.URL.Scheme,
+	)
 
 	pool, ok := lb.findPool(r.URL.Path)
 	if !ok {
@@ -100,12 +132,14 @@ func (lb *fluxl7) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "service not found")
 		return
 	}
+
 	backend := lb.selectBackend(pool)
 	if backend == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprint(w, "service unavailable")
 		return
 	}
+
 	ctx := context.WithValue(r.Context(), backendContextKey, backend)
 	lb.proxy.ServeHTTP(w, r.WithContext(ctx))
 }
@@ -121,18 +155,30 @@ func (lb *fluxl7) findPool(reqPath string) (*BackendPool, bool) {
 
 	for matcher, pool := range lb.servicePool {
 		if reqPath == matcher || strings.HasPrefix(reqPath, matcher+"/") {
-			log.Info().Msgf("Matched request path %s to service %s", reqPath, pool.serviceName)
+			log.Info().Msgf(
+				"Matched request path %s to service %s",
+				reqPath,
+				pool.serviceName,
+			)
+
 			return pool, true
 		}
 	}
+
 	return nil, false
 }
 
 func (lb *fluxl7) selectBackend(pool *BackendPool) *backend.Backend {
-	healthyBackends := pool.GetHealthBackends()
+	healthyBackends := pool.GetHealthyBackends()
+
 	if len(healthyBackends) == 0 {
-		log.Error().Msgf("No healthy backends available for service %s", pool.serviceName)
+		log.Error().Msgf(
+			"No healthy backends available for service %s",
+			pool.serviceName,
+		)
+
 		return nil
 	}
+
 	return pool.getNextBackend(healthyBackends)
 }

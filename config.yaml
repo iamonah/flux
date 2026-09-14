@@ -1,40 +1,28 @@
-services:
-  - name: payments-v1
-    matcher: /api/v1/payments
-    strategy: round-robin
-    health_check:
-      path: /health
-    replicas:
-      - url: http://localhost:8081
-      - url: http://localhost:8082
-      - url: http://localhost:8083
-  - name: payments-v2
-    matcher: /api/v2/users
-    strategy: weighted-round-robin
-    health_check:
-      path: /health
-    replicas:
-      - url: http://localhost:9081
-        metadata:
-          weight: 1
-      - url: http://localhost:9082
-        metadata:
-          weight: 2
-      - url: http://localhost:9083
-        metadata:
-          weight: 1
-  - name: users
-    matcher: /users
-    strategy: round-robin
-    health_check:
-      path: /health
-    replicas:
-      - url: http://localhost:8084
-      - url: http://localhost:8085
-      - url: http://localhost:8086
 mode: l7
 max_retries: 3
 tls:
   enabled: true
   cert_file: ./certs/server.crt
   key_file: ./certs/server.key
+
+consul:
+  address: localhost:8500
+
+services:
+  - name: payments-v1
+    matcher: /api/v1/payments
+    strategy: round-robin
+    health_check:
+      path: /health
+
+  - name: payments-v2
+    matcher: /api/v2/users
+    strategy: weighted-round-robin
+    health_check:
+      path: /health
+
+  - name: users
+    matcher: /users
+    strategy: round-robin
+    health_check:
+      path: /health

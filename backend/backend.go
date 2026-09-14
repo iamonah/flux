@@ -11,8 +11,8 @@ import (
 )
 
 type Backend struct {
-	URL *url.URL
-
+	URL               *url.URL
+	ID                string
 	mutex             sync.RWMutex
 	IsAlive           atomic.Bool
 	ActiveConnections atomic.Int32
