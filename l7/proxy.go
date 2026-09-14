@@ -1,8 +1,8 @@
 package l7
 
 import (
+	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"strings"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/iamonah/loadbalancer/backend"
 	"github.com/iamonah/loadbalancer/config"
+	"github.com/iamonah/loadbalancer/util/discovery"
 	"github.com/iamonah/loadbalancer/util/health"
 	"github.com/rs/zerolog/log"
 )
@@ -22,10 +23,15 @@ type fluxl7 struct {
 	servicePool map[string]*BackendPool
 
 	// This could later come from an external config file or service discovery mechanism.
-	config *config.Config
+	config    *config.Config
+	registry  discovery.Registry
 
 	proxy httputil.ReverseProxy
 }
+
+type selectedBackendKey struct{}
+
+var backendContextKey selectedBackendKey
 
 func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 	svcPools := make(map[string]*BackendPool)
@@ -34,18 +40,14 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 	for _, service := range cfg.Services {
 		pool, err := NewBackendPool(service)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to create server pool for service %s: %w",
-				service.Name,
-				err,
-			)
+			return nil, fmt.Errorf("failed to create server pool for service %s: %w", service.Name, err)
 		}
 
 		svcPools[service.Matcher] = pool
 		pools = append(pools, pool)
 	}
 
-	hc, err := health.NewHealthCheck(pools, 10*time.Second)
+	hc, err := health.NewHealthCheck(pools, 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create health checker: %w", err)
 	}
@@ -59,35 +61,28 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 
 	lb.proxy = httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			backend := lb.selectBackend(pr.In)
-			if backend == nil {
+			selected, ok := pr.In.Context().Value(backendContextKey).(*backend.Backend)
+			if !ok || selected == nil {
+				// This should never happen because ServeHTTP selects
+				// the backend before calling the reverse proxy.
+				log.Error().Msg("selected backend missing from request context")
 				return
 			}
 
-			pr.SetURL(backend.URL)
+			pr.SetURL(selected.URL)
+			// Prevent clients from injecting internal proxy headers.
+			pr.Out.Header.Del("X-Internal-Secret")
+			// Set trusted forwarding headers based on the incoming request.
+			pr.SetXForwarded()
+		},
 
-			req := pr.Out
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Error().
+				Err(err).
+				Msgf("Error proxying request for %s", r.URL.String())
 
-			req.Header.Del("X-Forwarded-For")
-			req.Header.Del("X-Forwarded-Host")
-			req.Header.Del("X-Forwarded-Proto")
-			req.Header.Del("X-Internal-Secret")
-			req.Header.Del("Server")
-
-			clientIP, _, err := net.SplitHostPort(pr.In.RemoteAddr)
-			if err == nil {
-				req.Header.Set("X-Forwarded-For", clientIP)
-			} else {
-				req.Header.Set("X-Forwarded-For", pr.In.RemoteAddr)
-			}
-
-			req.Header.Set("X-Forwarded-Host", pr.In.Host)
-
-			if pr.In.TLS != nil {
-				req.Header.Set("X-Forwarded-Proto", "https")
-			} else {
-				req.Header.Set("X-Forwarded-Proto", "http")
-			}
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprint(w, "bad gateway")
 		},
 	}
 
@@ -97,17 +92,27 @@ func Newfluxl7(cfg *config.Config) (*fluxl7, error) {
 // ServeHTTP implements http.Handler.
 func (lb *fluxl7) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().Msgf("Received new request for %s", r.URL.String())
+	log.Info().Msgf("L7 Proxy routing request: path: %s host: %s scheme: %s", r.URL.Path, r.Host, r.URL.Scheme)
 
-	log.Info().Msgf(
-		"L7 Proxy routing request: path: %s host: %s scheme: %s",
-		r.URL.Path,
-		r.URL.Host,
-		r.URL.Scheme,
-	)
-
-	lb.proxy.ServeHTTP(w, r)
+	pool, ok := lb.findPool(r.URL.Path)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, "service not found")
+		return
+	}
+	backend := lb.selectBackend(pool)
+	if backend == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, "service unavailable")
+		return
+	}
+	ctx := context.WithValue(r.Context(), backendContextKey, backend)
+	lb.proxy.ServeHTTP(w, r.WithContext(ctx))
 }
 
+// TODO: implement a more sophisticated matcher, such as regex or
+// subdomain-based matching.
+//
 // Prefix matching is currently O(N) because we iterate over configured
 // matchers. This is fine for now, but I will consider using a trie/radix
 // tree if the number of routes grows significantly.
@@ -116,39 +121,18 @@ func (lb *fluxl7) findPool(reqPath string) (*BackendPool, bool) {
 
 	for matcher, pool := range lb.servicePool {
 		if reqPath == matcher || strings.HasPrefix(reqPath, matcher+"/") {
-			log.Info().Msgf(
-				"Matched request path %s to service %s",
-				reqPath,
-				pool.serviceName,
-			)
-
+			log.Info().Msgf("Matched request path %s to service %s", reqPath, pool.serviceName)
 			return pool, true
 		}
 	}
-
 	return nil, false
 }
 
-func (lb *fluxl7) selectBackend(r *http.Request) *backend.Backend {
-	pool, ok := lb.findPool(r.URL.Path)
-	if !ok {
-		log.Warn().Msgf(
-			"No matching service pool found for request path: %s",
-			r.URL.Path,
-		)
-
-		return nil
-	}
-
+func (lb *fluxl7) selectBackend(pool *BackendPool) *backend.Backend {
 	healthyBackends := pool.GetHealthBackends()
-
 	if len(healthyBackends) == 0 {
-		log.Error().Msgf(
-			"No healthy backends available for service %s",
-			pool.serviceName,
-		)
+		log.Error().Msgf("No healthy backends available for service %s", pool.serviceName)
 		return nil
 	}
-
 	return pool.getNextBackend(healthyBackends)
 }
