@@ -3,6 +3,7 @@ package l7
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/url"
 	"time"
 
@@ -89,10 +90,7 @@ func instancesToBackends(instances []consul.Instance, existing []*backend.Backen
 
 		metadata := make(map[string]string)
 
-		for key, value := range instance.Metadata {
-			metadata[key] = value
-		}
-
+		maps.Copy(metadata, instance.Metadata)
 		b := &backend.Backend{
 			ID:       instance.ID,
 			URL:      parsedURL,
