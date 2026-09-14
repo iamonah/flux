@@ -204,6 +204,16 @@ go run ./cmd/loadb -port 8080 -config-path config.yaml
 
 ## Verify
 
+The test suite expects:
+
+* Consul to be running 
+* The initial demo backend servers to be running
+
+Start the demo backend servers, then run:
+
+```bash
+go run ./cmd/demo-server
+```
+
 ```bash
 go test ./...
-```
