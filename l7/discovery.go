@@ -17,11 +17,7 @@ type ServiceDiscovery struct {
 	interval  time.Duration
 }
 
-func NewServiceDiscovery(
-	d consul.Discovery,
-	pools []*BackendPool,
-	interval time.Duration,
-) *ServiceDiscovery {
+func NewServiceDiscovery(d consul.Discovery, pools []*BackendPool, interval time.Duration) *ServiceDiscovery {
 	return &ServiceDiscovery{
 		discovery: d,
 		pools:     pools,
@@ -52,9 +48,7 @@ func (sd *ServiceDiscovery) discover(ctx context.Context) {
 
 		instances, err := sd.discovery.Discover(ctx, serviceName)
 		if err != nil {
-			log.Error().
-				Err(err).
-				Msgf("Failed to discover service %s", serviceName)
+			log.Error().Err(err).Msgf("Failed to discover service %s", serviceName)
 			continue
 		}
 
@@ -62,26 +56,16 @@ func (sd *ServiceDiscovery) discover(ctx context.Context) {
 
 		backends, err := instancesToBackends(instances, existing)
 		if err != nil {
-			log.Error().
-				Err(err).
-				Msgf("Failed to create backends for service %s", serviceName)
+			log.Error().Err(err).Msgf("Failed to create backends for service %s", serviceName)
 			continue
 		}
 
 		pool.ReplaceBackends(backends)
-
-		log.Info().Msgf(
-			"Discovered %d backends for service %s",
-			len(backends),
-			serviceName,
-		)
+		log.Info().Msgf("Discovered %d backends for service %s", len(backends), serviceName)
 	}
 }
 
-func instancesToBackends(
-	instances []consul.Instance,
-	existing []*backend.Backend,
-) ([]*backend.Backend, error) {
+func instancesToBackends(instances []consul.Instance, existing []*backend.Backend) ([]*backend.Backend, error) {
 	existingByID := make(map[string]*backend.Backend)
 
 	for _, b := range existing {
@@ -98,19 +82,11 @@ func instancesToBackends(
 			continue
 		}
 
-		rawURL := fmt.Sprintf(
-			"http://%s:%d",
-			instance.Address,
-			instance.Port,
-		)
+		rawURL := fmt.Sprintf("http://%s:%d", instance.Address, instance.Port)
 
 		parsedURL, err := url.Parse(rawURL)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to parse backend URL %s: %w",
-				rawURL,
-				err,
-			)
+			return nil, fmt.Errorf("failed to parse backend URL %s: %w", rawURL, err)
 		}
 
 		metadata := make(map[string]string)

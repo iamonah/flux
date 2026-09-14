@@ -1,15 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/iamonah/loadbalancer/config"
 	"github.com/iamonah/loadbalancer/l7"
+	"github.com/iamonah/loadbalancer/util/consul"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -21,6 +22,7 @@ var (
 
 func main() {
 	flag.Parse()
+
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
 	file, err := os.ReadFile(*configFile)
@@ -28,8 +30,7 @@ func main() {
 		log.Fatal().Msg("Failed to open config file: " + err.Error())
 	}
 
-	filedata := strings.NewReader(string(file))
-	cfg, err := config.LoadConfig(filedata)
+	cfg, err := config.LoadConfig(bytes.NewReader(file))
 	if err != nil {
 		log.Fatal().Msg("Failed to load config: " + err.Error())
 	}
@@ -44,10 +45,12 @@ func main() {
 		Addr:    ":" + strconv.Itoa(*port),
 		Handler: lb,
 	}
+
 	log.Info().Msg(fmt.Sprintf("Starting load balancer on port %d", *port))
 
-	if cfg.TLS.Enable && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
+	if cfg.TLS.Enabled && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
 		log.Info().Msg("TLS Termination enabled.")
+
 		err = server.ListenAndServeTLS(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	} else {
 		err = server.ListenAndServe()
@@ -64,16 +67,24 @@ type flux interface {
 
 func NewFlux(cfg *config.Config) (flux, error) {
 	if cfg.Mode == nil {
-		return nil, fmt.Errorf("load balancer mode is not specified in the config")
+		return nil, fmt.Errorf(
+			"load balancer mode is not specified in the config",
+		)
 	}
+
 	switch *cfg.Mode {
 	case "l7":
-		return l7.Newfluxl7(cfg)
+		registry, err := consul.NewRegistry(cfg.Consul.Address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create service discovery: %w", err)
+		}
+
+		return l7.Newfluxl7(cfg, registry)
+
 	case "l4":
 		return nil, fmt.Errorf("l4 mode is not implemented yet")
+
 	default:
 		return nil, fmt.Errorf("unsupported load balancer mode: %s", *cfg.Mode)
 	}
 }
-
-//

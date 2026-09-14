@@ -1,14 +1,40 @@
 package l7
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/iamonah/loadbalancer/config"
+	"github.com/iamonah/loadbalancer/util/consul"
 )
+
+type mockDiscovery struct {
+	instances []consul.Instance
+}
+
+func (m *mockDiscovery) Discover(ctx context.Context, serviceName string) ([]consul.Instance, error) {
+	return m.instances, nil
+}
+
+func instanceFromServer(id string, serviceName string, serverURL string) consul.Instance {
+	parsedURL, _ := url.Parse(serverURL)
+
+	host := parsedURL.Hostname()
+	port, _ := strconv.Atoi(parsedURL.Port())
+
+	return consul.Instance{
+		ID:      id,
+		SvcName: serviceName,
+		Address: host,
+		Port:    port,
+	}
+}
 
 func TestBackendServers(t *testing.T) {
 	backend1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,24 +56,30 @@ func TestBackendServers(t *testing.T) {
 	defer backend3.Close()
 
 	cfg, err := config.LoadConfig(strings.NewReader(`
+mode: l7
+
 services:
   - name: payments-v1
     matcher: /api/v1/payments
     strategy: round-robin
+    health_check:
+      path: /
 `))
-
 	if err != nil {
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	// httptest servers use dynamic ports, so inject their URLs into the test config.
-	cfg.Services[0].Replicas = []config.Replica{
-		{URL: backend1.URL},
-		{URL: backend2.URL},
-		{URL: backend3.URL},
+	instances := []consul.Instance{
+		instanceFromServer("backend-1", "payments-v1", backend1.URL),
+		instanceFromServer("backend-2", "payments-v1", backend2.URL),
+		instanceFromServer("backend-3", "payments-v1", backend3.URL),
 	}
 
-	lb, err := Newfluxl7(cfg)
+	discovery := &mockDiscovery{
+		instances: instances,
+	}
+
+	lb, err := Newfluxl7(cfg, discovery)
 	if err != nil {
 		t.Fatalf("Failed to create load balancer: %v", err)
 	}
@@ -55,15 +87,10 @@ services:
 	server := httptest.NewServer(lb)
 	defer server.Close()
 
-	type responseResult struct {
-		status int
-		body   string
-	}
-
-	responses := make([]responseResult, 0)
-
 	for i := 0; i < 4; i++ {
-		response, err := http.Get(server.URL + "/api/v1/payments")
+		response, err := http.Get(
+			server.URL + "/api/v1/payments",
+		)
 		if err != nil {
 			t.Fatalf("Request failed: %v", err)
 		}
@@ -75,24 +102,14 @@ services:
 			t.Fatalf("Failed to read response body: %v", err)
 		}
 
-		responses = append(responses, responseResult{
-			status: response.StatusCode,
-			body:   string(body),
-		})
-	}
-
-	for _, response := range responses {
-		if response.status != http.StatusOK {
-			t.Fatalf("Expected status code 200, got %d", response.status)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("Expected status code 200, got %d", response.StatusCode)
 		}
 
-		t.Logf("Response body: %s", response.body)
+		t.Logf("Response body: %s", body)
 
-		if !strings.Contains(response.body, "Hello from demo server") {
-			t.Fatalf(
-				"Expected response containing 'Hello from demo server', got %s",
-				response.body,
-			)
+		if !strings.Contains(string(body), "Hello from demo server") {
+			t.Fatalf("Expected response containing 'Hello from demo server', got %s", body)
 		}
 	}
 }

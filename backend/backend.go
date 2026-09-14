@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/iamonah/loadbalancer/config"
+	"github.com/iamonah/loadbalancer/util/consul"
 )
 
 type Backend struct {
@@ -22,23 +22,26 @@ type Backend struct {
 }
 
 // GetMetaOrDefault returns the value associated with the given key in the
-// metadata, or returns the default
+// metadata, or returns the default.
 func (s *Backend) GetMetaOrDefault(key, def string) string {
 	v, ok := s.Metadata[key]
 	if !ok {
 		return def
 	}
+
 	return v
 }
 
-// GetMetaOrDefaultInt returns the int value associated with the given key in the
-// metadata, or returns the default
+// GetMetaOrDefaultInt returns the int value associated with the given key in
+// the metadata, or returns the default.
 func (s *Backend) GetMetaOrDefaultInt(key string, def int) int {
 	v := s.GetMetaOrDefault(key, fmt.Sprintf("%d", def))
+
 	a, err := strconv.Atoi(v)
 	if err != nil {
 		return def
 	}
+
 	return a
 }
 
@@ -46,16 +49,26 @@ func (s *Backend) GetActiveConnections() int32 {
 	return s.ActiveConnections.Load()
 }
 
-func NewBackend(cfg *config.Replica) (*Backend, error) {
-	parsedURL, err := url.Parse(cfg.URL)
+func NewBackend(instance consul.Instance) (*Backend, error) {
+	rawURL := fmt.Sprintf(
+		"http://%s:%d",
+		instance.Address,
+		instance.Port,
+	)
+
+	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to parse URL: %w", err)
+		return nil, fmt.Errorf("failed to parse backend URL: %w", err)
 	}
+
 	metadata := make(map[string]string)
-	if cfg.Metadata.Weight != nil {
-		metadata["weight"] = fmt.Sprintf("%d", *cfg.Metadata.Weight)
+
+	for key, value := range instance.Metadata {
+		metadata[key] = value
 	}
+
 	backend := &Backend{
+		ID:       instance.ID,
 		URL:      parsedURL,
 		Metadata: metadata,
 	}

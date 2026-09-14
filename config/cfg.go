@@ -8,7 +8,7 @@ import (
 )
 
 type TLSConfig struct {
-	Enable   bool   `yaml:"enabled"`
+	Enabled  bool   `yaml:"enabled"`
 	CertFile string `yaml:"cert_file,omitempty"`
 	KeyFile  string `yaml:"key_file,omitempty"`
 }
@@ -17,35 +17,32 @@ type HealthCheckConfig struct {
 	Path string `yaml:"path"`
 }
 
-type Metadata struct {
-	Weight     *uint32 `yaml:"weight"`
-	MaxRetries *uint32 `yaml:"max_retries"` //default: 3
-}
-
-type Replica struct {
-	URL      string   `yaml:"url"`
-	Metadata Metadata `yaml:"metadata"`
-}
-
 type Service struct {
 	Name        string             `yaml:"name"`
 	Matcher     string             `yaml:"matcher"`
-	Replicas    []Replica          `yaml:"replicas"`
-	Strategy    *string            `yaml:"strategy"`
+	Strategy    *string            `yaml:"strategy,omitempty"`
 	HealthCheck *HealthCheckConfig `yaml:"health_check,omitempty"`
 }
 
+type ConsulConfig struct {
+	Address string `yaml:"address"`
+}
+
 type Config struct {
-	Services []*Service `yaml:"services"`
-	Mode     *string    `yaml:"mode,omitempty"`
-	TLS      TLSConfig  `yaml:"tls,omitempty"`
+	Mode        *string       `yaml:"mode,omitempty"`
+	MaxRetries  uint32        `yaml:"max_retries"`
+	TLS         TLSConfig     `yaml:"tls,omitempty"`
+	Consul      ConsulConfig  `yaml:"consul"`
+	Services    []*Service    `yaml:"services"`
 }
 
 func LoadConfig(reader io.Reader) (*Config, error) {
 	var config Config
+
 	err := yaml.NewDecoder(reader).Decode(&config)
 	if err != nil {
 		return nil, fmt.Errorf("loadconfig: %w", err)
 	}
+
 	return &config, nil
 }
