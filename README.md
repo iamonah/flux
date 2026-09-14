@@ -105,6 +105,15 @@ The current path matcher supports exact and prefix matches.
   * Advanced failure handling and retry policies
   * Backend state tracking and recovery
 
+* **Security**
+  * Consul ACLs and authentication
+  * TLS/mTLS between Flux and Consul
+  * Least-privilege permissions for service discovery
+  * HTTPS connections to backend services
+  * Rate limiting
+  * Request and connection limits
+  * Stronger API and edge security
+
 ## Request Path
 
 ```text
