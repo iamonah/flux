@@ -45,13 +45,7 @@ func startServer(port int, name string, serviceName string, weight string) {
 		return
 	}
 
-	fmt.Printf(
-		"registered %s as %s at %s:%d\n",
-		name,
-		serviceName,
-		instance.Address,
-		instance.Port,
-	)
+	fmt.Printf("registered %s as %s at %s:%d\n", name, serviceName, instance.Address, instance.Port)
 
 	mux := http.NewServeMux()
 

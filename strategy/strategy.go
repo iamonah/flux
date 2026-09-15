@@ -39,42 +39,34 @@ func (s StrategyType) String() string {
 	return string(s)
 }
 
-type Strategy interface {
-	NextServer(servers []*backend.Backend) *backend.Backend
+var strategyRegistry = map[StrategyType]func() backend.Strategy{
+	RoundRobin: func() backend.Strategy {
+		return NewRoundRobin()
+	},
+	WeightedRoundRobin: func() backend.Strategy {
+		return NewSmoothWRR()
+	},
 }
-
-var strategyRegistry = make(map[StrategyType]func([]*backend.Backend) Strategy)
 
 // TODO: implement LeastConnections
-// case LeastConnections:
-//
-//	return NewLeastConnections(),
-func init() {
-	strategyRegistry = map[StrategyType]func([]*backend.Backend) Strategy{
-		RoundRobin: func(servers []*backend.Backend) Strategy {
-			return NewRoundRobin()
-		},
-		WeightedRoundRobin: func(servers []*backend.Backend) Strategy {
-			return NewSmoothWRR(servers)
-		},
-	}
-}
 
-func NewStrategy(strategy *string, servers []*backend.Backend) (Strategy, error) {
+func NewStrategy(strategy *string) (backend.Strategy, error) {
 	if strategy == nil {
 		return NewRoundRobin(), nil
 	}
+
 	st, err := ParseStrategyType(*strategy)
 	if err != nil {
 		log.Warn().Str("strategy", *strategy).Msg("strategy initializer not found, falling back to round-robin")
 		st = RoundRobin
 	}
-	strategyRegistry, ok := strategyRegistry[st]
+
+	constructor, ok := strategyRegistry[st]
 	if !ok {
 		return nil, fmt.Errorf("strategy not initialized: %s", *strategy)
 	}
 
-	return strategyRegistry(servers), nil
+	return constructor(), nil
 }
 
 type roundRobinAlgo struct {
@@ -82,9 +74,7 @@ type roundRobinAlgo struct {
 }
 
 func NewRoundRobin() *roundRobinAlgo {
-	rr := &roundRobinAlgo{}
-	rr.Current.Store(0)
-	return rr
+	return &roundRobinAlgo{}
 }
 
 func (rr *roundRobinAlgo) NextServer(servers []*backend.Backend) *backend.Backend {
@@ -104,101 +94,73 @@ func (rr *roundRobinAlgo) NextServer(servers []*backend.Backend) *backend.Backen
 	}
 }
 
-type node struct {
+type smoothWRRState struct {
 	Server        *backend.Backend
-	Weight        int32 // Fixed configured capacity weight
-	CurrentWeight int32 // Dynamically adjusted runtime weight
+	Weight        int32
+	CurrentWeight int32
 }
 
-// Smooth WRR provides smoother load distribution than standard WRR.
-//
-// It selects the next server using weights that represent
-// the relative compute capacity of each server.
 type smoothWRRAlgo struct {
-	mu    sync.Mutex
-	nodes []*node
+	mu     sync.Mutex
+	states map[*backend.Backend]*smoothWRRState
 }
 
-func NewNode(server *backend.Backend, weight int32) *node {
-	return &node{
-		Server:        server,
-		Weight:        weight,
-		CurrentWeight: 0,
-	}
+func NewSmoothWRR() *smoothWRRAlgo {
+	return &smoothWRRAlgo{states: make(map[*backend.Backend]*smoothWRRState)}
 }
 
-func NewSmoothWRR(servers []*backend.Backend) *smoothWRRAlgo {
-	nodes := make([]*node, 0, len(servers))
-
-	for _, server := range servers {
-		node := &node{
-			Server: server,
-		}
-
-		node.Weight = int32(server.GetMetaOrDefaultInt("weight", 1))
-		node.CurrentWeight = 0
-		nodes = append(nodes, node)
-	}
-
-	wrr := &smoothWRRAlgo{
-		nodes: nodes,
-	}
-	return wrr
-}
-
-// General overview of how the smooth WRR algorithm works:
-// Server A → weight 5
-// Server B → weight 1
-// The total weight is:
-// 5 + 1 = 6
-// So over a sufficiently large number of requests, the target distribution is approximately:
-// Server A → 5/6 ≈ 83.3% of the Traffic
-// Server B → 1/6 ≈ 16.7% of the Traffic
 func (s *smoothWRRAlgo) NextServer(servers []*backend.Backend) *backend.Backend {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.nodes) == 0 {
+	if len(servers) == 0 {
 		return nil
 	}
 
-	if !sameServers(s.nodes, servers) {
-		s.nodes = make([]*node, 0, len(servers))
-		for _, server := range servers {
-			node := &node{
-				Server: server,
-			}
-			node.Weight = int32(server.GetMetaOrDefaultInt("weight", 1))
-			node.CurrentWeight = 0
-			s.nodes = append(s.nodes, node)
-		}
-	}
-	var best *node
+	s.syncStates(servers)
+
+	var best *smoothWRRState
 	var totalWeight int32
 
-	for _, node := range s.nodes {
-		node.CurrentWeight += node.Weight
-		totalWeight += node.Weight
+	for _, server := range servers {
+		state := s.states[server]
 
-		if best == nil || node.CurrentWeight > best.CurrentWeight {
-			best = node
+		state.CurrentWeight += state.Weight
+		totalWeight += state.Weight
+
+		if best == nil || state.CurrentWeight > best.CurrentWeight {
+			best = state
 		}
+	}
+
+	if best == nil {
+		return nil
 	}
 
 	best.CurrentWeight -= totalWeight
+
 	return best.Server
 }
 
-func sameServers(nodes []*node, servers []*backend.Backend) bool {
-	if len(nodes) != len(servers) {
-		return false
-	}
+func (s *smoothWRRAlgo) syncStates(servers []*backend.Backend) {
+	currentServers := make(map[*backend.Backend]struct{}, len(servers))
 
-	for i, server := range servers {
-		if nodes[i].Server != server {
-			return false
+	for _, server := range servers {
+		currentServers[server] = struct{}{}
+
+		if _, exists := s.states[server]; exists {
+			continue
+		}
+
+		s.states[server] = &smoothWRRState{
+			Server: server,
+			Weight: int32(server.GetMetaOrDefaultInt("weight", 1)),
 		}
 	}
 
-	return true
+	for server := range s.states {
+		if _, exists := currentServers[server]; !exists {
+			delete(s.states, server)
+		}
+	}
 }

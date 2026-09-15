@@ -14,11 +14,11 @@ import (
 
 type ServiceDiscovery struct {
 	discovery consul.Discovery
-	pools     []*BackendPool
+	pools     []*backend.BackendPool
 	interval  time.Duration
 }
 
-func NewServiceDiscovery(d consul.Discovery, pools []*BackendPool, interval time.Duration) *ServiceDiscovery {
+func NewServiceDiscovery(d consul.Discovery, pools []*backend.BackendPool, interval time.Duration) *ServiceDiscovery {
 	return &ServiceDiscovery{
 		discovery: d,
 		pools:     pools,

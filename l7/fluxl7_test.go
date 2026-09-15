@@ -36,35 +36,32 @@ func instanceFromServer(
 	port, _ := strconv.Atoi(parsedURL.Port())
 
 	return consul.Instance{
-		ID:          id,
+		ID:      id,
 		SvcName: serviceName,
-		Address:     host,
-		Port:        port,
+		Address: host,
+		Port:    port,
 	}
 }
 
 func TestBackendServers(t *testing.T) {
-	backend1 := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("Hello from demo server 1"))
-		},
+	backend1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Hello from demo server 1"))
+	},
 	))
 	defer backend1.Close()
 
-	backend2 := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("Hello from demo server 2"))
-		},
+	backend2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Hello from demo server 2"))
+	},
 	))
 	defer backend2.Close()
 
-	backend3 := httptest.NewServer(http.HandlerFunc(
-		func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("Hello from demo server 3"))
-		},
+	backend3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Hello from demo server 3"))
+	},
 	))
 	defer backend3.Close()
 
@@ -83,21 +80,9 @@ services:
 	}
 
 	instances := []consul.Instance{
-		instanceFromServer(
-			"backend-1",
-			"payments-v1",
-			backend1.URL,
-		),
-		instanceFromServer(
-			"backend-2",
-			"payments-v1",
-			backend2.URL,
-		),
-		instanceFromServer(
-			"backend-3",
-			"payments-v1",
-			backend3.URL,
-		),
+		instanceFromServer("backend-1", "payments-v1", backend1.URL),
+		instanceFromServer("backend-2", "payments-v1", backend2.URL),
+		instanceFromServer("backend-3", "payments-v1", backend3.URL),
 	}
 
 	discovery := &mockDiscovery{
@@ -128,23 +113,13 @@ services:
 		}
 
 		if response.StatusCode != http.StatusOK {
-			t.Fatalf(
-				"expected status code 200, got %d",
-				response.StatusCode,
-			)
+			t.Fatalf("expected status code 200, got %d", response.StatusCode)
 		}
 
 		t.Logf("Response body: %s", body)
 
-		if !strings.Contains(
-			string(body),
-			"Hello from demo server",
-		) {
-			t.Fatalf(
-				"expected response containing "+
-					"'Hello from demo server', got %s",
-				body,
-			)
+		if !strings.Contains(string(body), "Hello from demo server") {
+			t.Fatalf("expected response containing "+"'Hello from demo server', got %s", body)
 		}
 	}
 }

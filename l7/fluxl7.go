@@ -10,6 +10,7 @@ import (
 
 	"github.com/iamonah/loadbalancer/backend"
 	"github.com/iamonah/loadbalancer/config"
+	"github.com/iamonah/loadbalancer/strategy"
 	"github.com/iamonah/loadbalancer/util/consul"
 	"github.com/iamonah/loadbalancer/util/health"
 	"github.com/rs/zerolog/log"
@@ -20,12 +21,11 @@ type fluxl7 struct {
 	//
 	// Note(self): The matcher could be more sophisticated, such as regex
 	// or subdomain-based matching, but for now we use simple string matching.
-	servicePool map[string]*BackendPool
+	servicePool map[string]*backend.BackendPool
 
 	// This could later come from an external config file or service discovery mechanism.
-	config    *config.Config
-	discovery consul.Discovery
-	proxy     httputil.ReverseProxy
+	config *config.Config
+	proxy  httputil.ReverseProxy
 }
 
 type selectedBackendKey struct{}
@@ -33,13 +33,26 @@ type selectedBackendKey struct{}
 var backendContextKey selectedBackendKey
 
 func Newfluxl7(cfg *config.Config, serviceDiscovery consul.Discovery) (*fluxl7, error) {
-	svcPools := make(map[string]*BackendPool)
+	svcPools := make(map[string]*backend.BackendPool)
 	pools := make([]health.BackendPool, 0, len(cfg.Services))
 
 	for _, service := range cfg.Services {
-		pool, err := NewBackendPool(service)
+		strategy, err := strategy.NewStrategy(service.Strategy)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create server pool for service %s: %w", service.Name, err)
+			return nil, fmt.Errorf(
+				"failed to create strategy for service %s: %w",
+				service.Name,
+				err,
+			)
+		}
+
+		pool, err := backend.NewBackendPool(service, strategy)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"failed to create server pool for service %s: %w",
+				service.Name,
+				err,
+			)
 		}
 
 		svcPools[service.Matcher] = pool
@@ -49,22 +62,21 @@ func Newfluxl7(cfg *config.Config, serviceDiscovery consul.Discovery) (*fluxl7, 
 	lb := &fluxl7{
 		config:      cfg,
 		servicePool: svcPools,
-		discovery:   serviceDiscovery,
 	}
 
-	discoveryPools := make([]*BackendPool, 0, len(svcPools))
+	discoveryPools := make([]*backend.BackendPool, 0, len(svcPools))
 
 	for _, pool := range svcPools {
 		discoveryPools = append(discoveryPools, pool)
 	}
 
-	sd := NewServiceDiscovery(lb.discovery, discoveryPools, 10*time.Second)
+	sd := NewServiceDiscovery(serviceDiscovery, discoveryPools, 10*time.Second)
 
 	// Perform initial discovery synchronously so the backend
 	// pools are populated before the load balancer starts serving requests.
 	sd.discover(context.Background())
 
-	hc, err := health.NewHealthCheck(pools, 1*time.Second)
+	hc, err := health.NewHealthCheck(pools, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create health checker: %w", err)
 	}
@@ -94,7 +106,9 @@ func Newfluxl7(cfg *config.Config, serviceDiscovery consul.Discovery) (*fluxl7, 
 		},
 
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Error().Err(err).Msgf("Error proxying request for %s", r.URL.String())
+			log.Error().
+				Err(err).
+				Msgf("Error proxying request for %s", r.URL.String())
 
 			w.WriteHeader(http.StatusBadGateway)
 			fmt.Fprint(w, "bad gateway")
@@ -142,12 +156,14 @@ func (lb *fluxl7) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Prefix matching is currently O(N) because we iterate over configured
 // matchers. This is fine for now, but I will consider using a trie/radix
 // tree if the number of routes grows significantly.
-func (lb *fluxl7) findPool(reqPath string) (*BackendPool, bool) {
+func (lb *fluxl7) findPool(reqPath string) (*backend.BackendPool, bool) {
 	log.Info().Msgf("Finding pool for request path: %s", reqPath)
 
 	for matcher, pool := range lb.servicePool {
 		if reqPath == matcher || strings.HasPrefix(reqPath, matcher+"/") {
-			log.Info().Msgf("Matched request path %s to service %s", reqPath, pool.serviceName)
+			log.Info().
+				Msgf("Matched request path %s to service %s", reqPath, pool.ServiceName)
+
 			return pool, true
 		}
 	}
@@ -155,13 +171,15 @@ func (lb *fluxl7) findPool(reqPath string) (*BackendPool, bool) {
 	return nil, false
 }
 
-func (lb *fluxl7) selectBackend(pool *BackendPool) *backend.Backend {
+func (lb *fluxl7) selectBackend(pool *backend.BackendPool) *backend.Backend {
 	healthyBackends := pool.GetHealthyBackends()
 
 	if len(healthyBackends) == 0 {
-		log.Error().Msgf("No healthy backends available for service %s", pool.serviceName)
+		log.Error().
+			Msgf("No healthy backends available for service %s", pool.ServiceName)
+
 		return nil
 	}
 
-	return pool.getNextBackend(healthyBackends)
+	return pool.GetNextBackend(healthyBackends)
 }

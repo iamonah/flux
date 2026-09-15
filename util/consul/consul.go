@@ -7,7 +7,7 @@ import (
 
 type Instance struct {
 	ID       string
-	SvcName     string
+	SvcName  string
 	Address  string
 	Port     int
 	Metadata map[string]string
