@@ -18,18 +18,11 @@ type mockDiscovery struct {
 	instances []consul.Instance
 }
 
-func (m *mockDiscovery) Discover(
-	ctx context.Context,
-	serviceName string,
-) ([]consul.Instance, error) {
+func (m *mockDiscovery) Discover(ctx context.Context, serviceName string) ([]consul.Instance, error) {
 	return m.instances, nil
 }
 
-func instanceFromServer(
-	id string,
-	serviceName string,
-	serverURL string,
-) consul.Instance {
+func instanceFromServer(id string, serviceName string, serverURL string) consul.Instance {
 	parsedURL, _ := url.Parse(serverURL)
 
 	host := parsedURL.Hostname()
