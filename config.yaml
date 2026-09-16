@@ -1,7 +1,8 @@
+flux_port: 8080
 mode: l7
 max_retries: 3
 tls:
-  enabled: true
+  enabled: false
   cert_file: ./certs/server.crt
   key_file: ./certs/server.key
 
@@ -16,13 +17,13 @@ services:
       path: /health
 
   - name: payments-v2
-    matcher: /api/v2/users
+    matcher: /api/v2/payments
     strategy: weighted-round-robin
     health_check:
       path: /health
 
-  - name: users
-    matcher: /users
-    strategy: round-robin
-    health_check:
-      path: /health
+  # - name: users
+  #   matcher: /users
+  #   strategy: round-robin
+  #   health_check:
+  #     path: /health

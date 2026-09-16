@@ -29,11 +29,12 @@ type ConsulConfig struct {
 }
 
 type Config struct {
-	Mode        *string       `yaml:"mode,omitempty"`
-	MaxRetries  uint32        `yaml:"max_retries"`
-	TLS         TLSConfig     `yaml:"tls,omitempty"`
-	Consul      ConsulConfig  `yaml:"consul"`
-	Services    []*Service    `yaml:"services"`
+	FluxPort   int          `yaml:"flux_port"`
+	Mode       *string      `yaml:"mode,omitempty"`
+	MaxRetries uint32       `yaml:"max_retries"`
+	TLS        TLSConfig    `yaml:"tls,omitempty"`
+	Consul     ConsulConfig `yaml:"consul"`
+	Services   []*Service   `yaml:"services"`
 }
 
 func LoadConfig(reader io.Reader) (*Config, error) {

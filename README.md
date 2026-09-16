@@ -71,6 +71,7 @@ The current path matcher supports exact and prefix matches.
 * **Service discovery** — dynamically discovers healthy service instances through Consul
 
 * **Health checks** — HTTP health endpoints or TCP connection checks with exponential-backoff retries
+  * When `health_check.path` is configured, Flux performs an HTTP health check against the specified endpoint. If no health-check path is configured, Flux falls back to a TCP connection check against the backend host and port.
 
 * **Forwarded headers** — manages `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto`
 
@@ -79,28 +80,17 @@ The current path matcher supports exact and prefix matches.
 ## Roadmap
 
 * **Layer 4 TCP proxy**
-
   * TCP connection-level load balancing
   * 5-tuple-based backend selection
 
 * **Load-balancing strategies**
-
   * Least-connections
   * Additional balancing policies
 
 * **Service discovery**
-
-  * ~~Dynamic backend discovery~~
-  * ~~Consul integration~~
   * Kubernetes service discovery
 
-* **Pool coordination**
-
-  * Distributed backend-pool coordination
-  * Left-Right wait-free synchronization for read-heavy workloads
-
 * **Reliability**
-
   * Passive health checks
   * Advanced failure handling and retry policies
   * Backend state tracking and recovery
@@ -144,13 +134,15 @@ Backend instances are discovered from Consul and maintained locally in each serv
 
 The reverse proxy also replaces client-controlled forwarding headers with verified `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` values.
 
-## Pool Coordination
+## Backend Pool Synchronization
 
 Each `BackendPool` owns the strategy selected for its service. This keeps backend selection independent: one service can use round robin while another uses weighted round robin.
 
-The current round-robin implementation uses atomic state so concurrent requests can advance its selection index safely. Backend-pool access currently uses an `RWMutex`, providing safe concurrent access for backend selection, health checking, and dynamic backend updates.
+Backend instances are updated dynamically through service discovery and health checking. The pool uses Left-Right synchronization to allow concurrent readers to access backend snapshots without contending on a reader-writer lock.
 
-Left-Right synchronization is planned as a future optimization for the read-heavy backend-pool workload.
+Writers update the inactive backend snapshot, publish it by switching the active index, and wait for readers using the previous snapshot to finish before reusing it.
+
+This is designed for the read-heavy workload of backend selection, where requests frequently read the current backend set while discovery and health checks update it less frequently.
 
 ## Configuration
 
@@ -180,12 +172,6 @@ services:
     strategy: weighted-round-robin
     health_check:
       path: /health
-
-  - name: users
-    matcher: /users
-    strategy: round-robin
-    health_check:
-      path: /health
 ```
 
 The `strategy` field is optional. When omitted, Flux uses its default load-balancing strategy.
@@ -199,7 +185,7 @@ When `health_check.path` is configured, Flux performs an HTTP health check again
 ## Run Locally
 
 ```bash
-go run ./cmd/loadb -port 8080 -config-path config.yaml
+go run ./cmd/flux -config-path config.yaml
 ```
 
 ## Verify
@@ -217,3 +203,4 @@ go run ./cmd/demo-server
 
 ```bash
 go test ./...
+```

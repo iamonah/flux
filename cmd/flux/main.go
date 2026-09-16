@@ -16,7 +16,6 @@ import (
 )
 
 var (
-	port       = flag.Int("port", 8080, "listening port")
 	configFile = flag.String("config-path", "config.yaml", "path to config file")
 )
 
@@ -27,29 +26,28 @@ func main() {
 
 	file, err := os.ReadFile(*configFile)
 	if err != nil {
-		log.Fatal().Msg("Failed to open config file: " + err.Error())
+		log.Fatal().Err(err).Msg("failed to read config file")
 	}
 
 	cfg, err := config.LoadConfig(bytes.NewReader(file))
 	if err != nil {
-		log.Fatal().Msg("Failed to load config: " + err.Error())
+		log.Fatal().Err(err).Msg("failed to load config")
 	}
 
 	lb, err := NewFlux(cfg)
 	if err != nil {
-		log.Fatal().Msg("Failed to create load balancer: " + err.Error())
-		return
+		log.Fatal().Err(err).Msg("failed to create load balancer")
 	}
 
 	server := http.Server{
-		Addr:    ":" + strconv.Itoa(*port),
+		Addr:    ":" + strconv.Itoa(cfg.FluxPort),
 		Handler: lb,
 	}
 
-	log.Info().Msg(fmt.Sprintf("Starting load balancer on port %d", *port))
+	log.Info().Int("port", cfg.FluxPort).Msg("starting load balancer")
 
 	if cfg.TLS.Enabled && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
-		log.Info().Msg("TLS Termination enabled.")
+		log.Info().Msg("TLS termination enabled")
 
 		err = server.ListenAndServeTLS(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	} else {
@@ -57,7 +55,7 @@ func main() {
 	}
 
 	if err != nil && err != http.ErrServerClosed {
-		log.Fatal().Msg("Failed to start flux server: " + err.Error())
+		log.Fatal().Err(err).Msg("failed to start Flux server")
 	}
 }
 
@@ -67,9 +65,7 @@ type flux interface {
 
 func NewFlux(cfg *config.Config) (flux, error) {
 	if cfg.Mode == nil {
-		return nil, fmt.Errorf(
-			"load balancer mode is not specified in the config",
-		)
+		return nil, fmt.Errorf("load balancer mode is not specified in the config")
 	}
 
 	switch *cfg.Mode {
