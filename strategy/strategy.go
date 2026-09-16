@@ -61,12 +61,12 @@ func NewStrategy(strategy *string) (backend.Strategy, error) {
 		st = RoundRobin
 	}
 
-	constructor, ok := strategyRegistry[st]
+	str, ok := strategyRegistry[st]
 	if !ok {
 		return nil, fmt.Errorf("strategy not initialized: %s", *strategy)
 	}
 
-	return constructor(), nil
+	return str(), nil
 }
 
 type roundRobinAlgo struct {

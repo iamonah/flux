@@ -1,7 +1,9 @@
 package backend
 
 import (
+	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/iamonah/loadbalancer/config"
 )
@@ -13,35 +15,58 @@ type Strategy interface {
 type BackendPool struct {
 	ServiceName string
 
-	mutex           sync.RWMutex
-	Backends        []*Backend
+	backends     [2][]*Backend
+	readCounters [2]atomic.Int32
+	activeIndex  atomic.Int32
+	writerMutex  sync.Mutex
+
 	Strategy        Strategy
 	HealthCheckPath *string
 }
 
 func (sp *BackendPool) GetBackends() []*Backend {
-	sp.mutex.RLock()
-	defer sp.mutex.RUnlock()
+	for {
+		active := sp.activeIndex.Load()
 
-	backends := make([]*Backend, len(sp.Backends))
-	copy(backends, sp.Backends)
+		sp.readCounters[active].Add(1)
 
-	return backends
+		if sp.activeIndex.Load() != active {
+			sp.readCounters[active].Add(-1)
+			continue
+		}
+
+		backends := make([]*Backend, len(sp.backends[active]))
+		copy(backends, sp.backends[active])
+
+		sp.readCounters[active].Add(-1)
+
+		return backends
+	}
 }
 
 func (sp *BackendPool) GetHealthyBackends() []*Backend {
-	sp.mutex.RLock()
-	defer sp.mutex.RUnlock()
+	for {
+		active := sp.activeIndex.Load()
 
-	healthyBackends := make([]*Backend, 0, len(sp.Backends))
+		sp.readCounters[active].Add(1)
 
-	for _, b := range sp.Backends {
-		if b.IsAlive.Load() {
-			healthyBackends = append(healthyBackends, b)
+		if sp.activeIndex.Load() != active {
+			sp.readCounters[active].Add(-1)
+			continue
 		}
-	}
 
-	return healthyBackends
+		healthyBackends := make([]*Backend, 0, len(sp.backends[active]))
+
+		for _, b := range sp.backends[active] {
+			if b.IsAlive.Load() {
+				healthyBackends = append(healthyBackends, b)
+			}
+		}
+
+		sp.readCounters[active].Add(-1)
+
+		return healthyBackends
+	}
 }
 
 func (sp *BackendPool) GetServiceName() string {
@@ -53,19 +78,32 @@ func (sp *BackendPool) GetHealthCheckPath() *string {
 }
 
 func (sp *BackendPool) ReplaceBackends(backends []*Backend) {
-	sp.mutex.Lock()
-	defer sp.mutex.Unlock()
+	sp.writerMutex.Lock()
+	defer sp.writerMutex.Unlock()
 
-	sp.Backends = backends
+	active := sp.activeIndex.Load()
+	inactive := 1 - active
+
+	newBackends := make([]*Backend, len(backends))
+	copy(newBackends, backends)
+
+	sp.backends[inactive] = newBackends
+
+	sp.activeIndex.Store(inactive)
+
+	for sp.readCounters[active].Load() > 0 {
+		runtime.Gosched()
+	}
 }
 
 func NewBackendPool(svcCfg *config.Service, strategy Strategy) (*BackendPool, error) {
-	backends := make([]*Backend, 0)
-
 	pool := &BackendPool{
 		ServiceName: svcCfg.Name,
-		Backends:    backends,
-		Strategy:    strategy,
+		backends: [2][]*Backend{
+			make([]*Backend, 0),
+			make([]*Backend, 0),
+		},
+		Strategy: strategy,
 	}
 
 	if svcCfg.HealthCheck != nil {
@@ -76,8 +114,5 @@ func NewBackendPool(svcCfg *config.Service, strategy Strategy) (*BackendPool, er
 }
 
 func (sp *BackendPool) GetNextBackend(healthyBackends []*Backend) *Backend {
-	sp.mutex.RLock()
-	defer sp.mutex.RUnlock()
-
 	return sp.Strategy.NextServer(healthyBackends)
 }
