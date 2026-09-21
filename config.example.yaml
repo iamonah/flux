@@ -1,0 +1,109 @@
+# Flux Configuration Example
+#
+# This file demonstrates configuration for:
+#
+# - Layer 7: HTTP reverse proxy with path-based routing
+# - Layer 4: TCP/UDP proxy with connection-based routing
+
+
+# ==========================================================
+# Layer 7 Configuration Example
+# ==========================================================
+#
+# Layer 7 uses a single listener (`flux_port`) and routes
+# incoming HTTP requests to services based on matchers.
+#
+# Example:
+# /api/v1/payments -> payments-v1 service
+# /api/v2/payments -> payments-v2 service
+#
+# Strategies:
+# - round-robin
+# - weighted-round-robin
+
+
+flux_port: "8080"
+mode: l7
+
+max_retries: 3
+tls:
+  enabled: false
+  cert_file: ./certs/server.crt
+  key_file: ./certs/server.key
+
+consul:
+  address: localhost:8500
+
+services:
+  - name: payments-v1
+
+    # HTTP path used for routing
+    matcher: /api/v1/payments
+
+    strategy: round-robin
+
+    health_check:
+      path: /health
+
+
+  - name: payments-v2
+
+    matcher: /api/v2/payments
+
+    strategy: weighted-round-robin
+
+    health_check:
+      path: /health
+
+
+---
+
+# ==========================================================
+# Layer 4 Configuration Example
+# ==========================================================
+#
+# Layer 4 does not use a global flux_port.
+#
+# Each service defines its own listening port because
+# L4 routing does not have HTTP paths or host information
+# to distinguish services.
+#
+# Flux creates separate listeners for each service. (when in multi-service mode)
+#
+# Example:
+#
+# :8081 -> payments-service1
+# :8082 -> payments-service2
+# :5353 -> dns
+#
+#
+# Strategies:
+# - round-robin
+# - hash
+
+
+mode: l4
+
+max_retries: 3
+
+tls:
+  enabled: false
+consul:
+  address: localhost:8500
+services:
+  - name: payments-service1
+    # Transport protocol
+    protocol: tcp
+    # Port Flux listens on for this service
+    port: 8081
+    strategy: round-robin
+
+  - name: payments-service2
+    protocol: tcp
+    port: 8082
+    strategy: hash
+
+  - name: dns
+    protocol: udp
+    port: 5353
+    strategy: hash

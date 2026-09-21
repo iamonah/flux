@@ -3,12 +3,12 @@ package main
 import (
 	"bytes"
 	"flag"
-	"fmt"
 	"net/http"
 	"os"
-	"strconv"
+	"strings"
 
 	"github.com/iamonah/loadbalancer/config"
+	"github.com/iamonah/loadbalancer/l4"
 	"github.com/iamonah/loadbalancer/l7"
 	"github.com/iamonah/loadbalancer/util/consul"
 	"github.com/rs/zerolog"
@@ -34,53 +34,61 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to load config")
 	}
 
-	lb, err := NewFlux(cfg)
+	if cfg.Mode == nil {
+		log.Fatal().Msg("load balancer mode is not specified in config")
+	}
+
+	registry, err := consul.NewRegistry(cfg.Consul.Address)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to create load balancer")
+		log.Fatal().Err(err).Msg("failed to create service discovery")
+	}
+
+	switch strings.ToLower(*cfg.Mode) {
+	case "l7":
+		startL7(cfg, registry)
+
+	case "l4":
+		startL4(cfg, registry)
+
+	default:
+		log.Fatal().Str("mode", *cfg.Mode).Msg("unsupported load balancer mode")
+	}
+}
+
+func startL7(cfg *config.Config, registry consul.Discovery) {
+	lb, err := l7.Newfluxl7(cfg, registry)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create L7 load balancer")
 	}
 
 	server := http.Server{
-		Addr:    ":" + strconv.Itoa(cfg.FluxPort),
+		Addr:    ":" + cfg.FluxPort,
 		Handler: lb,
 	}
 
-	log.Info().Int("port", cfg.FluxPort).Msg("starting load balancer")
+	log.Info().Str("mode", "l7").Str("port", cfg.FluxPort).Msg("starting Flux")
 
 	if cfg.TLS.Enabled && cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
 		log.Info().Msg("TLS termination enabled")
-
 		err = server.ListenAndServeTLS(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	} else {
 		err = server.ListenAndServe()
 	}
 
 	if err != nil && err != http.ErrServerClosed {
-		log.Fatal().Err(err).Msg("failed to start Flux server")
+		log.Fatal().Err(err).Msg("failed to start L7 server")
 	}
 }
 
-type flux interface {
-	ServeHTTP(w http.ResponseWriter, r *http.Request)
-}
-
-func NewFlux(cfg *config.Config) (flux, error) {
-	if cfg.Mode == nil {
-		return nil, fmt.Errorf("load balancer mode is not specified in the config")
+func startL4(cfg *config.Config, registry consul.Discovery) {
+	lb, err := l4.NewfluxL4(cfg, registry)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create L4 load balancer")
 	}
 
-	switch *cfg.Mode {
-	case "l7":
-		registry, err := consul.NewRegistry(cfg.Consul.Address)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create service discovery: %w", err)
-		}
+	log.Info().Str("mode", "l4").Msg("starting Flux")
 
-		return l7.Newfluxl7(cfg, registry)
-
-	case "l4":
-		return nil, fmt.Errorf("l4 mode is not implemented yet")
-
-	default:
-		return nil, fmt.Errorf("unsupported load balancer mode: %s", *cfg.Mode)
+	if err := lb.StartL4Proxy(); err != nil {
+		log.Fatal().Err(err).Msg("failed to start L4 proxy")
 	}
 }
