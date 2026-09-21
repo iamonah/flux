@@ -11,6 +11,7 @@ import (
 	"github.com/iamonah/loadbalancer/backend"
 	"github.com/iamonah/loadbalancer/config"
 	"github.com/iamonah/loadbalancer/strategy"
+	"github.com/iamonah/loadbalancer/util"
 	"github.com/iamonah/loadbalancer/util/consul"
 	"github.com/iamonah/loadbalancer/util/health"
 	"github.com/rs/zerolog/log"
@@ -31,7 +32,7 @@ func Newfluxl7(cfg *config.Config, serviceDiscovery consul.Discovery) (*fluxl7, 
 	pools := make([]health.BackendPool, 0, len(cfg.Services))
 
 	for _, service := range cfg.Services {
-		strategy, err := strategy.NewStrategy(service.Strategy)
+		strategy, err := strategy.NewStrategy(service.StrategyType)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create strategy for service %s: %w", service.Name, err)
 		}
@@ -45,30 +46,26 @@ func Newfluxl7(cfg *config.Config, serviceDiscovery consul.Discovery) (*fluxl7, 
 		pools = append(pools, pool)
 	}
 
-	lb := &fluxl7{
-		config:      cfg,
-		servicePool: svcPools,
-	}
+	lb := &fluxl7{config: cfg, servicePool: svcPools}
 
 	discoveryPools := make([]*backend.BackendPool, 0, len(svcPools))
 	for _, pool := range svcPools {
 		discoveryPools = append(discoveryPools, pool)
 	}
 
-	sd := NewServiceDiscovery(serviceDiscovery, discoveryPools, 10*time.Second)
+	sd := util.NewServiceDiscovery(serviceDiscovery, discoveryPools, 10*time.Second)
 
 	// Perform initial discovery synchronously so the backend
 	// pools are populated before the load balancer starts serving requests.
-	sd.discover(context.Background())
+	sd.Discover(context.Background())
 
 	hc, err := health.NewHealthCheck(pools, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create health checker: %w", err)
 	}
 
-	// Perform the initial health check synchronously.
-	// This ensures backend health is established before serving requests.
-	hc.CheckAllBackendsSync()
+	// Perform the initial health check synchronously ensuring backend health is established before serving requests.
+	hc.SyncAllHealthyBackends()
 
 	// Continue health checks in the background.
 	go hc.Start()
@@ -96,9 +93,7 @@ func Newfluxl7(cfg *config.Config, serviceDiscovery consul.Discovery) (*fluxl7, 
 		},
 
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Error().
-				Err(err).
-				Msgf("Error proxying request for %s", r.URL.String())
+			log.Error().Err(err).Msgf("Error proxying request for %s", r.URL.String())
 
 			w.WriteHeader(http.StatusBadGateway)
 			fmt.Fprint(w, "bad gateway")
@@ -140,19 +135,14 @@ func (lb *fluxl7) findPool(reqPath string) (*backend.BackendPool, bool) {
 			return pool, true
 		}
 	}
-
 	return nil, false
 }
 
 func (lb *fluxl7) selectBackend(pool *backend.BackendPool) *backend.Backend {
 	healthyBackends := pool.GetHealthyBackends()
 	if len(healthyBackends) == 0 {
-		log.Error().Msgf(
-			"No healthy backends available for service %s",
-			pool.ServiceName,
-		)
+		log.Error().Msgf("No healthy backends available for service %s", pool.ServiceName)
 		return nil
 	}
-
 	return pool.GetNextBackend(healthyBackends)
 }
