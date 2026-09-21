@@ -16,6 +16,8 @@ var (
 	RoundRobin         StrategyType = newStrategyType("round-robin")
 	WeightedRoundRobin StrategyType = newStrategyType("weighted-round-robin")
 	LeastConnections   StrategyType = newStrategyType("least-connections")
+	Hash               StrategyType = newStrategyType("hash") //five-tuple based hash
+
 )
 
 var strategyTypes = make(map[string]StrategyType)
@@ -50,20 +52,20 @@ var strategyRegistry = map[StrategyType]func() backend.Strategy{
 
 // TODO: implement LeastConnections
 
-func NewStrategy(strategy *string) (backend.Strategy, error) {
-	if strategy == nil {
+func NewStrategy(strategy string) (backend.Strategy, error) {
+	if strategy == "" {
 		return NewRoundRobin(), nil
 	}
 
-	st, err := ParseStrategyType(*strategy)
+	st, err := ParseStrategyType(strategy)
 	if err != nil {
-		log.Warn().Str("strategy", *strategy).Msg("strategy initializer not found, falling back to round-robin")
+		log.Warn().Str("strategy", strategy).Msg("strategy initializer not found, falling back to round-robin")
 		st = RoundRobin
 	}
 
 	str, ok := strategyRegistry[st]
 	if !ok {
-		return nil, fmt.Errorf("strategy not initialized: %s", *strategy)
+		return nil, fmt.Errorf("strategy not initialized: %s", strategy)
 	}
 
 	return str(), nil
@@ -96,8 +98,8 @@ func (rr *roundRobinAlgo) NextServer(servers []*backend.Backend) *backend.Backen
 
 type smoothWRRState struct {
 	Server        *backend.Backend
-	Weight        int32
-	CurrentWeight int32
+	Weight        int32 // The actual weight of the backend
+	CurrentWeight int32 //dynamic weight that changes over time based on the algorithm
 }
 
 type smoothWRRAlgo struct {
@@ -143,6 +145,7 @@ func (s *smoothWRRAlgo) NextServer(servers []*backend.Backend) *backend.Backend 
 }
 
 func (s *smoothWRRAlgo) syncStates(servers []*backend.Backend) {
+	//available servers in the current pool
 	currentServers := make(map[*backend.Backend]struct{}, len(servers))
 
 	for _, server := range servers {
@@ -158,6 +161,7 @@ func (s *smoothWRRAlgo) syncStates(servers []*backend.Backend) {
 		}
 	}
 
+	//comparing the current servers with the existing states and removing states no longer present
 	for server := range s.states {
 		if _, exists := currentServers[server]; !exists {
 			delete(s.states, server)

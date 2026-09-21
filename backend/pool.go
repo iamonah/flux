@@ -14,12 +14,14 @@ type Strategy interface {
 
 type BackendPool struct {
 	ServiceName string
+	Protocol    string
 
 	backends     [2][]*Backend
 	readCounters [2]atomic.Int32
 	activeIndex  atomic.Int32
 	writerMutex  sync.Mutex
 
+	StrategyType    string
 	Strategy        Strategy
 	HealthCheckPath *string
 }
@@ -73,6 +75,10 @@ func (sp *BackendPool) GetServiceName() string {
 	return sp.ServiceName
 }
 
+func (sp *BackendPool) GetProtocol() string {
+	return sp.Protocol
+}
+
 func (sp *BackendPool) GetHealthCheckPath() *string {
 	return sp.HealthCheckPath
 }
@@ -99,11 +105,13 @@ func (sp *BackendPool) ReplaceBackends(backends []*Backend) {
 func NewBackendPool(svcCfg *config.Service, strategy Strategy) (*BackendPool, error) {
 	pool := &BackendPool{
 		ServiceName: svcCfg.Name,
+		Protocol:    svcCfg.Protocol,
 		backends: [2][]*Backend{
 			make([]*Backend, 0),
 			make([]*Backend, 0),
 		},
-		Strategy: strategy,
+		Strategy:     strategy,
+		StrategyType: svcCfg.StrategyType,
 	}
 
 	if svcCfg.HealthCheck != nil {

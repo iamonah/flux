@@ -18,10 +18,12 @@ type HealthCheckConfig struct {
 }
 
 type Service struct {
-	Name        string             `yaml:"name"`
-	Matcher     string             `yaml:"matcher"`
-	Strategy    *string            `yaml:"strategy,omitempty"`
-	HealthCheck *HealthCheckConfig `yaml:"health_check,omitempty"`
+	Name         string             `yaml:"name"`
+	Protocol     string             `yaml:"protocol,omitempty"`
+	Port         uint16             `yaml:"port,omitempty"`
+	Matcher      string             `yaml:"matcher,omitempty"`
+	StrategyType string             `yaml:"strategy,omitempty"`
+	HealthCheck  *HealthCheckConfig `yaml:"health_check,omitempty"`
 }
 
 type ConsulConfig struct {
@@ -29,7 +31,7 @@ type ConsulConfig struct {
 }
 
 type Config struct {
-	FluxPort   int          `yaml:"flux_port"`
+	FluxPort   string       `yaml:"flux_port"`
 	Mode       *string      `yaml:"mode,omitempty"`
 	MaxRetries uint32       `yaml:"max_retries"`
 	TLS        TLSConfig    `yaml:"tls,omitempty"`

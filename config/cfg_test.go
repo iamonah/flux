@@ -95,14 +95,14 @@ services:
 		)
 	}
 
-	if config.Services[0].Strategy == nil {
+	if config.Services[0].StrategyType == "" {
 		t.Fatal("Expected strategy for service1 to be set")
 	}
 
-	if *config.Services[0].Strategy != "round-robin" {
+	if config.Services[0].StrategyType != "round-robin" {
 		t.Errorf(
 			"Expected strategy 'round-robin', got '%s'",
-			*config.Services[0].Strategy,
+			config.Services[0].StrategyType,
 		)
 	}
 
@@ -124,14 +124,15 @@ services:
 		)
 	}
 
-	if config.Services[1].Strategy == nil {
+
+	if config.Services[1].StrategyType == "" {
 		t.Fatal("Expected strategy for service2 to be set")
 	}
 
-	if *config.Services[1].Strategy != "weighted-round-robin" {
+	if config.Services[1].StrategyType != "weighted-round-robin" {
 		t.Errorf(
 			"Expected strategy 'weighted-round-robin', got '%s'",
-			*config.Services[1].Strategy,
+			config.Services[1].StrategyType,
 		)
 	}
 
