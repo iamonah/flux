@@ -14,7 +14,10 @@ func TestBackendPoolConcurrentReadsAndWrites(t *testing.T) {
 		Name: "test-service",
 	}
 
-	pool, err := NewBackendPool(svcCfg, strategy)
+	pool, err := NewBackendPool(
+		svcCfg,
+		strategy,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,30 +45,29 @@ func TestBackendPoolConcurrentReadsAndWrites(t *testing.T) {
 			for j := 0; j < 10_000; j++ {
 				result := pool.GetHealthyBackends()
 
-				if len(result) == 0 {
-					t.Error("expected healthy backends")
-					return
+				if len(result) != len(backends) {
+					t.Errorf(
+						"expected %d healthy backends, got %d",
+						len(backends),
+						len(result),
+					)
 				}
 			}
 		}()
 	}
 
-	// Concurrently replace the backend list.
-	wg.Add(1)
+	// Start concurrent writers.
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
 
-	go func() {
-		defer wg.Done()
+		go func() {
+			defer wg.Done()
 
-		for i := 0; i < 1_000; i++ {
-			newBackends := make([]*Backend, 10)
-
-			for j := range newBackends {
-				newBackends[j] = backends[j]
+			for j := 0; j < 1_000; j++ {
+				pool.ReplaceBackends(backends)
 			}
-
-			pool.ReplaceBackends(newBackends)
-		}
-	}()
+		}()
+	}
 
 	wg.Wait()
 }
