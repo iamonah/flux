@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/iamonah/loadbalancer/backend"
@@ -33,7 +34,7 @@ func (sd *ServiceDiscovery) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			sd.Discover(ctx)
+			sd.Discover(ctx,false)
 
 		case <-ctx.Done():
 			return
@@ -63,12 +64,22 @@ func (sd *ServiceDiscovery) discoverPool(ctx context.Context, pool *backend.Back
 	log.Info().Msgf("Discovered %d backends for service %s", len(backends), serviceName)
 }
 
-func (sd *ServiceDiscovery) Discover(ctx context.Context) {
+func (sd *ServiceDiscovery) Discover(ctx context.Context, wait bool) {
+	var wg sync.WaitGroup
+
 	for _, pool := range sd.pools {
-		go sd.discoverPool(ctx, pool)
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			sd.discoverPool(ctx, pool)
+		}()
+	}
+
+	if wait {
+		wg.Wait()
 	}
 }
-
 func instancesToBackends(instances []consul.Instance, existing []*backend.Backend) ([]*backend.Backend, error) {
 	existingByID := make(map[string]*backend.Backend)
 

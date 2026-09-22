@@ -99,7 +99,7 @@ func NewfluxL4(cfg *config.Config, serviceDiscovery consul.Discovery) (*fluxL4, 
 	sd := util.NewServiceDiscovery(serviceDiscovery, discoveryPools, 10*time.Second)
 
 	//sync the initial state of the backends before the health checker.
-	sd.Discover(context.Background())
+	sd.Discover(context.Background(), true)
 
 	hc, err := health.NewHealthCheck(pools, 5*time.Second)
 	if err != nil {
@@ -122,16 +122,23 @@ func (l *fluxL4) StartL4Proxy() error {
 	listeners := make([]net.Listener, 0, len(l.servicePool))
 	udpConnections := make([]*net.UDPConn, 0, len(l.servicePool))
 
+	cleanup := func() {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
+
+		for _, conn := range udpConnections {
+			_ = conn.Close()
+		}
+	}
+
 	for key := range l.servicePool {
 		switch key.Protocol {
 		case "tcp":
 			listener, err := net.Listen("tcp", ":"+strconv.Itoa(int(key.Port)))
 
 			if err != nil {
-				for _, existing := range listeners {
-					_ = existing.Close()
-				}
-
+				cleanup()
 				return fmt.Errorf("failed to listen on TCP port %d: %w", key.Port, err)
 			}
 
@@ -142,10 +149,7 @@ func (l *fluxL4) StartL4Proxy() error {
 		case "udp":
 			conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: int(key.Port)})
 			if err != nil {
-				for _, existing := range udpConnections {
-					_ = existing.Close()
-				}
-
+				cleanup()
 				return fmt.Errorf("failed to listen on UDP port %d: %w", key.Port, err)
 			}
 

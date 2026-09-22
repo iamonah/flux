@@ -57,7 +57,7 @@ func Newfluxl7(cfg *config.Config, serviceDiscovery consul.Discovery) (*fluxl7, 
 
 	// Perform initial discovery synchronously so the backend
 	// pools are populated before the load balancer starts serving requests.
-	sd.Discover(context.Background())
+	sd.Discover(context.Background(), true)
 
 	hc, err := health.NewHealthCheck(pools, 5*time.Second)
 	if err != nil {
