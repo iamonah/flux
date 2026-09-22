@@ -1,2 +1,4 @@
 certs
 config.yaml
+Dockerfile
+docker-compose.yml
